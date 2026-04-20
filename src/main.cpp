@@ -1,19 +1,21 @@
-// cardputer-atari800 — entry point
-// Milestone 1: bootstrap + HAL smoke test
-
 #include <Arduino.h>
+#include <M5Cardputer.h>
 
 void setup() {
   Serial.begin(115200);
-  // small delay so the USB CDC has time to enumerate before first print
   delay(500);
   Serial.println();
   Serial.println("cardputer-atari800 — boot");
-  Serial.println("milestone 1: bootstrap + HAL smoke test");
+
+  auto cfg = M5.config();
+  M5Cardputer.begin(cfg, true);  // true = clearDisplay
+
+  Serial.println("M5Cardputer library initialized");
 }
 
 void loop() {
-  // idle heartbeat — proves the main loop is alive
+  M5Cardputer.update();  // required each loop for keyboard/button state
+
   static uint32_t last = 0;
   uint32_t now = millis();
   if (now - last >= 5000) {
