@@ -25,12 +25,37 @@ Requires PlatformIO Core:
 brew install platformio
 ```
 
-Then:
+Compile:
 
 ```bash
-pio run -e cardputer-adv             # compile
-pio run -e cardputer-adv -t upload   # flash
-pio device monitor -e cardputer-adv  # serial
+pio run -e cardputer-adv
+```
+
+The build produces `.pio/build/cardputer-adv/firmware.bin`.
+
+## Flash
+
+The expected workflow is via [M5Launcher](https://github.com/bmorcelli/Launcher)
+installed as the boot firmware. Copy `firmware.bin` to the Cardputer's SD card
+(Launcher's SD browser picks it up) or upload via Launcher's WUI (WiFi web UI).
+Launcher writes it to the inactive OTA app slot and reboots into it.
+
+```bash
+cp .pio/build/cardputer-adv/firmware.bin /Volumes/CARDPUTER/downloads/cardputer-atari800.bin
+```
+
+Then on the Cardputer: disable USB-MSC in Launcher, select the bin from the SD browser.
+
+Advanced alternative — directly flash as the *primary* firmware, **overwriting M5Launcher**:
+
+```bash
+pio run -e cardputer-adv -t upload
+```
+
+## Serial monitor
+
+```bash
+pio device monitor -e cardputer-adv
 ```
 
 ## Host-side tests
