@@ -15,6 +15,9 @@ static constexpr int SD_PIN_CS   = 12;
 static bool sd_mounted = false;
 
 static bool mount_sd() {
+  // Cardputer-Adv wires the SD card to hardware SPI2 on the ESP32-S3, which is
+  // separate from the LCD's bus. Re-initializing the `SPI` singleton here is
+  // safe because LGFX (the display driver) uses its own bus instance.
   SPI.begin(SD_PIN_SCK, SD_PIN_MISO, SD_PIN_MOSI, SD_PIN_CS);
   if (!SD.begin(SD_PIN_CS, SPI, 25000000)) {
     Serial.println("SD: mount failed (no card? wrong format? wrong pins?)");
