@@ -72,7 +72,6 @@ M5Cardputer speaks to the chips. Upstream `atari800` updates can be merged witho
 ```
 cardputer-atari800/
 ├── platformio.ini                # board target for Cardputer-Adv (exact ID verified at build time), deps, partitions
-├── partitions.csv                # 8 MB flash layout (firmware + OTA reserve + SD-unavailable fallback data)
 ├── lib/
 │   ├── atari800/                 # vendored upstream core, lightly patched for ESP32-S3
 │   │   ├── src/                  #   antic.c gtia.c cpu.c pokey.c sio.c memory.c pia.c ...
@@ -110,6 +109,8 @@ cardputer-atari800/
 └── docs/
     └── superpowers/specs/2026-04-20-cardputer-atari800-design.md
 ```
+
+Note: M1 uses the stock 8 MB Arduino OTA partition layout from the board JSON. A custom partitions.csv is only needed if flashing as the primary firmware (displacing M5Launcher).
 
 ## 3. Display pipeline
 

@@ -787,7 +787,7 @@ Before declaring M1 complete, walk through this list on real hardware:
 - [ ] With SD card inserted (FAT32), serial shows root listing AND LCD shows "SD: mounted" in green
 - [ ] Without SD card, serial shows mount-failed message AND LCD shows "SD: not mounted" in red; no crash
 - [ ] `ctest --test-dir build --output-on-failure` reports 1 passed / 0 failed
-- [ ] `git log --oneline` shows ~8 commits (T1/T2/T3/T4/T5/T6/T8/T9 — T7 dropped, plus the plan commits and review fixes)
+- [ ] `git log --oneline` shows ~15-20 commits (counts include plan edits and review-driven fixes, not just per-task commits)
 - [ ] `git tag -l` shows `v0.1-m1`
 
 When every box is checked, hand off to M2 planning.
