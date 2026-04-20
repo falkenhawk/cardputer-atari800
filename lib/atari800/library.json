@@ -1,0 +1,19 @@
+{
+  "name": "atari800_core",
+  "version": "5.2.0-cardputer",
+  "description": "atari800 emulator core (upstream vendored, C-only subset for ESP32-S3)",
+  "license": "GPL-2.0",
+  "build": {
+    "srcFilter": ["+<src/>"],
+    "includeDir": "src",
+    "flags": [
+      "-I$PROJECT_INCLUDE_DIR",
+      "-DBASIC",
+      "-DSTEREO_SOUND=0",
+      "-DCARDPUTER_ATARI800",
+      "-Wno-implicit-function-declaration",
+      "-Wno-unused-variable",
+      "-Wno-unused-parameter"
+    ]
+  }
+}
