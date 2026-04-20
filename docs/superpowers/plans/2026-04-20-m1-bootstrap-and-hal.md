@@ -27,7 +27,7 @@
 - `pio run -t upload` (direct esptool flash) is NOT used for M1 testing because it would overwrite M5Launcher. Keep it as a fallback for the day the user wants cardputer-atari800 to be the boot firmware.
 - Serial monitoring works identically either way: `pio device monitor -e cardputer-adv` reads the USB CDC serial of whatever app is currently running.
 
-**Implication for Task 7 (custom partitions):** Launcher's partition layout is what's actually in flash at runtime on the user's device. Our `partitions.csv` from Task 7 only applies if someone flashes this firmware directly (not via Launcher). We still create it so that path stays viable, but M1 verification happens under Launcher's partition layout.
+**Note on custom partitions:** The original plan had a Task 7 adding a custom `partitions.csv`. After T6 verified the Launcher flow end-to-end using the stock Arduino 8 MB OTA layout from the board JSON, T7 was dropped as unnecessary (see Task 7 section below for rationale). The firmware uses the stock OTA-capable 8 MB partition scheme by default, which is exactly what Launcher expects.
 
 ---
 
@@ -429,8 +429,7 @@ Add this helper above `setup()` in `src/main.cpp`:
 #include <SD.h>
 #include <SPI.h>
 
-// Cardputer-Adv SD card pins (from M5Cardputer hardware reference)
-// Confirm these against the schematic if the mount fails.
+// Cardputer-Adv SD card pins — verified on hardware.
 static constexpr int SD_PIN_SCK  = 40;
 static constexpr int SD_PIN_MISO = 39;
 static constexpr int SD_PIN_MOSI = 14;
@@ -534,58 +533,17 @@ git commit -m "mount microSD and list root; graceful fallback on no-card"
 
 ---
 
-### Task 7: Custom partitions for M5Launcher compatibility
+### Task 7: *(dropped — unnecessary for M5Launcher workflow)*
 
-**Files:**
-- Create: `partitions.csv`
-- Modify: `platformio.ini`
+**Status: dropped 2026-04-20 after T6 verified the Launcher flow end-to-end.**
 
-- [ ] **Step 1: Create `partitions.csv`**
+Original intent was to create a custom `partitions.csv` with OTA `app0`/`app1` slots so M5Launcher could flash new firmware without overwriting itself. However:
 
-This layout matches M5Launcher's expectations: two OTA app slots (so Launcher can flash a new firmware to the inactive slot and swap), plus NVS for settings fallback. Total = 8 MB.
+- The board definition at `boards/m5stack-cardputer.json` already specifies `partitions = default_8MB.csv`, which is Arduino ESP32's stock 8 MB layout that includes OTA `app0` (3.8 MB) + OTA `app1` (3.8 MB) + NVS + otadata. This is exactly what M5Launcher expects.
+- T2–T6 verified on real hardware that M5Launcher flashes our firmware into the inactive OTA slot, reboots, and our app boots cleanly. No custom partition layout was needed.
+- Adding our own `partitions.csv` would be dead code for the Launcher-primary workflow. YAGNI.
 
-```csv
-# Name,   Type, SubType,  Offset,   Size,     Flags
-nvs,      data, nvs,      0x9000,   0x5000,
-otadata,  data, ota,      0xe000,   0x2000,
-app0,     app,  ota_0,    0x10000,  0x3E0000,
-app1,     app,  ota_1,    0x3F0000, 0x3E0000,
-spiffs,   data, spiffs,   0x7D0000, 0x30000,
-```
-
-Sizes: app0 and app1 each = 0x3E0000 = 3,997,696 bytes (~3.8 MB) each. This gives us comfortable headroom for the full v1 firmware without blocking the OTA swap. SPIFFS reserved 192 KB for future use; not required in v1 (SD is primary storage).
-
-- [ ] **Step 2: Reference from `platformio.ini`**
-
-Add inside the `[env:cardputer-adv]` section:
-
-```ini
-board_build.partitions = partitions.csv
-```
-
-- [ ] **Step 3: Build**
-
-Run: `pio run -e cardputer-adv`
-
-Expected: build succeeds. Output should mention the custom partition table was used. Flash usage should report against the ~3.8 MB app0 slot size.
-
-- [ ] **Step 4: HUMAN CHECKPOINT — reflash and verify**
-
-```bash
-pio run -e cardputer-adv -t upload
-pio device monitor -e cardputer-adv
-```
-
-Expected: firmware still boots and runs normally (splash + SD mount). Switching partition schemes wipes NVS once; this is expected on first boot with the new layout.
-
-Optional: if you have M5Launcher already flashed on another device or in M5Burner, verify it can see the firmware as a valid OTA target. Not required for milestone completion.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add partitions.csv platformio.ini
-git commit -m "add M5Launcher-compatible partition layout"
-```
+If someone ever wants to flash `cardputer-atari800` as the *primary* boot firmware (displacing Launcher), they will need to author a `partitions.csv` at that time — the stock Arduino OTA scheme works for that use case too, so the job is trivial then.
 
 ---
 
@@ -796,14 +754,14 @@ Expected: shows `v0.1-m1` with the message.
 Before declaring M1 complete, walk through this list on real hardware:
 
 - [ ] `pio run -e cardputer-adv` compiles cleanly (no warnings about M5Cardputer or Arduino APIs)
-- [ ] `pio run -e cardputer-adv -t upload` flashes successfully
-- [ ] Serial monitor shows `cardputer-atari800 — boot` immediately on reset
+- [ ] firmware.bin flashes via M5Launcher (SD browser or WUI) and boots
+- [ ] Serial monitor shows `cardputer-atari800 — boot` on reset
 - [ ] LCD shows 3-line splash in landscape orientation
-- [ ] Keyboard events print on serial (letter keys, Fn, Shift)
-- [ ] With SD card inserted (FAT32, `/atari800/` folder present), serial shows root listing AND LCD shows "SD: mounted" in green
+- [ ] Keyboard events print on serial (letter keys, Fn, Shift, Opt)
+- [ ] With SD card inserted (FAT32), serial shows root listing AND LCD shows "SD: mounted" in green
 - [ ] Without SD card, serial shows mount-failed message AND LCD shows "SD: not mounted" in red; no crash
 - [ ] `ctest --test-dir build --output-on-failure` reports 1 passed / 0 failed
-- [ ] `git log --oneline` shows ~9 commits (one per task except the tag)
+- [ ] `git log --oneline` shows ~8 commits (T1/T2/T3/T4/T5/T6/T8/T9 — T7 dropped, plus the plan commits and review fixes)
 - [ ] `git tag -l` shows `v0.1-m1`
 
 When every box is checked, hand off to M2 planning.
