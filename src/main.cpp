@@ -4,9 +4,21 @@
 #include <Arduino.h>
 
 void setup() {
-  // populated in Task 2
+  Serial.begin(115200);
+  // small delay so the USB CDC has time to enumerate before first print
+  delay(500);
+  Serial.println();
+  Serial.println("cardputer-atari800 — boot");
+  Serial.println("milestone 1: bootstrap + HAL smoke test");
 }
 
 void loop() {
-  // populated in Task 2
+  // idle heartbeat — proves the main loop is alive
+  static uint32_t last = 0;
+  uint32_t now = millis();
+  if (now - last >= 5000) {
+    last = now;
+    Serial.printf("uptime %lu ms\n", now);
+  }
+  delay(10);
 }
