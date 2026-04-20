@@ -1,10 +1,15 @@
 // cardputer-atari800 — entry point
-// Milestone 1: bootstrap + HAL smoke test
+// Milestone 2: core init + single-frame smoke test
 
 #include <Arduino.h>
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <SPI.h>
+
+extern "C" {
+#include "../lib/atari800/src/atari.h"
+#include "../lib/atari800/port.h"
+}
 
 // Cardputer-Adv SD card pins — verified on hardware.
 static constexpr int SD_PIN_SCK  = 40;
@@ -82,6 +87,24 @@ void setup() {
     d.setCursor(8, 80);
     d.setTextColor(TFT_RED, TFT_BLACK);
     d.print("SD: not mounted");
+  }
+
+  // M2: init the atari800 core
+  Serial.println("core: initialising atari800...");
+  int argc = 1;
+  char* argv[] = {(char*)"atari800"};
+  int init_ok = Atari800_Initialise(&argc, argv);
+  Serial.printf("core: init_ok=%d\n", init_ok);
+
+  if (init_ok) {
+    Serial.println("core: running 1 frame as smoke test...");
+    Atari800_Frame();
+    Serial.println("core: frame 1 done, heap OK");
+
+    size_t free_heap = ESP.getFreeHeap();
+    size_t free_psram = ESP.getFreePsram();
+    Serial.printf("heap: free=%u bytes, psram=%u bytes\n",
+                  (unsigned)free_heap, (unsigned)free_psram);
   }
 }
 
