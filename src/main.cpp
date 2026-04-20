@@ -1,3 +1,6 @@
+// cardputer-atari800 — entry point
+// Milestone 1: bootstrap + HAL smoke test
+
 #include <Arduino.h>
 #include <M5Cardputer.h>
 
@@ -8,7 +11,7 @@ void setup() {
   Serial.println("cardputer-atari800 — boot");
 
   auto cfg = M5.config();
-  M5Cardputer.begin(cfg, true);  // true = clearDisplay
+  M5Cardputer.begin(cfg, true);  // true = enableKeyboard (default)
 
   Serial.println("M5Cardputer library initialized");
 }
