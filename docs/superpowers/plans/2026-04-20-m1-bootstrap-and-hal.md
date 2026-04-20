@@ -210,6 +210,9 @@ git commit -m "boot with serial hello + idle heartbeat"
 Replace `src/main.cpp` entirely:
 
 ```cpp
+// cardputer-atari800 — entry point
+// Milestone 1: bootstrap + HAL smoke test
+
 #include <Arduino.h>
 #include <M5Cardputer.h>
 
@@ -220,7 +223,7 @@ void setup() {
   Serial.println("cardputer-atari800 — boot");
 
   auto cfg = M5.config();
-  M5Cardputer.begin(cfg, true);  // true = clearDisplay
+  M5Cardputer.begin(cfg, true);  // true = enableKeyboard (default)
 
   Serial.println("M5Cardputer library initialized");
 }
@@ -269,6 +272,9 @@ git commit -m "integrate M5Cardputer library (begin() in setup)"
 Replace `setup()` in `src/main.cpp`:
 
 ```cpp
+// cardputer-atari800 — entry point
+// Milestone 1: bootstrap + HAL smoke test
+
 void setup() {
   Serial.begin(115200);
   delay(500);
@@ -276,7 +282,7 @@ void setup() {
   Serial.println("cardputer-atari800 — boot");
 
   auto cfg = M5.config();
-  M5Cardputer.begin(cfg, true);
+  M5Cardputer.begin(cfg, true);  // true = enableKeyboard (default)
 
   // splash screen
   auto& d = M5Cardputer.Display;
