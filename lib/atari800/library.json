@@ -4,7 +4,7 @@
   "description": "atari800 emulator core (upstream vendored, C-only subset for ESP32-S3)",
   "license": "GPL-2.0",
   "build": {
-    "srcFilter": ["+<src/>"],
+    "srcFilter": ["+<*>"],
     "includeDir": "src",
     "flags": [
       "-I$PROJECT_INCLUDE_DIR",
