@@ -3,6 +3,45 @@
 
 #include <Arduino.h>
 #include <M5Cardputer.h>
+#include <SD.h>
+#include <SPI.h>
+
+// Cardputer-Adv SD card pins (from M5Cardputer hardware reference).
+// Confirm these against the schematic if the mount fails.
+static constexpr int SD_PIN_SCK  = 40;
+static constexpr int SD_PIN_MISO = 39;
+static constexpr int SD_PIN_MOSI = 14;
+static constexpr int SD_PIN_CS   = 12;
+
+static bool sd_mounted = false;
+
+static bool mount_sd() {
+  SPI.begin(SD_PIN_SCK, SD_PIN_MISO, SD_PIN_MOSI, SD_PIN_CS);
+  if (!SD.begin(SD_PIN_CS, SPI, 25000000)) {
+    Serial.println("SD: mount failed (no card? wrong format? wrong pins?)");
+    return false;
+  }
+  uint64_t size_mb = SD.cardSize() / (1024 * 1024);
+  Serial.printf("SD: mounted, %llu MB\n", size_mb);
+  return true;
+}
+
+static void list_sd_root() {
+  File root = SD.open("/");
+  if (!root) {
+    Serial.println("SD: could not open root");
+    return;
+  }
+  Serial.println("SD: root listing:");
+  while (File f = root.openNextFile()) {
+    Serial.printf("  %s%s  %u bytes\n",
+                  f.isDirectory() ? "DIR " : "    ",
+                  f.name(),
+                  (unsigned)f.size());
+    f.close();
+  }
+  root.close();
+}
 
 void setup() {
   Serial.begin(115200);
@@ -28,6 +67,20 @@ void setup() {
   d.print("bootstrap + HAL smoke");
 
   Serial.println("splash rendered");
+
+  sd_mounted = mount_sd();
+  if (sd_mounted) {
+    list_sd_root();
+
+    // also show mount status on LCD
+    d.setCursor(8, 80);
+    d.setTextColor(TFT_GREEN, TFT_BLACK);
+    d.print("SD: mounted");
+  } else {
+    d.setCursor(8, 80);
+    d.setTextColor(TFT_RED, TFT_BLACK);
+    d.print("SD: not mounted");
+  }
 }
 
 void loop() {
