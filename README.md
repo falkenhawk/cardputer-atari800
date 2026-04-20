@@ -63,7 +63,9 @@ pio device monitor -e cardputer-adv
 Pure-C logic is covered by a CMake test harness:
 
 ```bash
-cd test && cmake -B ../build . && cmake --build ../build && ctest --test-dir ../build
+cmake -B build -S test
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
 ## License

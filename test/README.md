@@ -7,10 +7,9 @@ flashing to the device and catches logic bugs before they ever touch hardware.
 ## Running
 
 ```bash
-cd test
-cmake -B ../build .
-cmake --build ../build
-ctest --test-dir ../build --output-on-failure
+cmake -B build -S test
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
 ## Adding tests
