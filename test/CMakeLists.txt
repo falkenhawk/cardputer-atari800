@@ -4,6 +4,10 @@ project(cardputer_atari800_tests C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# Enable warnings for every test executable. Locked in now so the pattern
+# sticks as new tests are added in M2+.
+add_compile_options(-Wall -Wextra -Wpedantic)
+
 # All host tests live here. Each test is a standalone executable for easy
 # isolation — ctest runs them and reports failures individually.
 enable_testing()
