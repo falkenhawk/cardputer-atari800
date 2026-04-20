@@ -1,0 +1,12 @@
+{
+  "name": "atari800_port",
+  "version": "0.1.0",
+  "description": "Port layer: core ↔ Cardputer hardware shim",
+  "dependencies": {
+    "atari800_core": "*"
+  },
+  "build": {
+    "srcFilter": ["+<src/>"],
+    "includeDir": "src"
+  }
+}
