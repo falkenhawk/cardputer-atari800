@@ -9,6 +9,12 @@
 /* Emulated machines we enable */
 #define BASIC                 /* built-in BASIC cartridge support */
 
+/* use upstream's built-in Altirra ROM replacements.
+   enables sysrom.c's EMUOS_ALTIRRA path, which auto-includes
+   roms/altirraos_*.{c,h} + altirra_basic.{c,h} + altirra_5200_os.{c,h}
+   and treats them as the default-available ROMs. */
+#define EMUOS_ALTIRRA 1
+
 /* Features we disable for embedded build */
 #undef SOUND                  /* M3 will enable */
 #undef STEREO_SOUND
