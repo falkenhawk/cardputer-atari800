@@ -51,4 +51,7 @@
 #undef HAVE_FCNTL_H
 #undef HAVE_SYS_STAT_H
 
+/* ESP32 newlib provides clock() — use it for Util_time() */
+#define HAVE_CLOCK 1
+
 #endif /* CONFIG_H */

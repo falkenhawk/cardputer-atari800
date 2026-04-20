@@ -281,6 +281,7 @@ static int MatchByName(char const *filename, int len, int only_if_not_set)
 	return -1;
 }
 
+#ifdef HAVE_OPENDIR
 int SYSROM_FindInDir(char const *directory, int only_if_not_set)
 {
 	DIR *dir;
@@ -350,6 +351,14 @@ int SYSROM_FindInDir(char const *directory, int only_if_not_set)
 	closedir(dir);
 	return TRUE;
 }
+#else /* !HAVE_OPENDIR — embedded: no directory scanning, always return FALSE */
+int SYSROM_FindInDir(char const *directory, int only_if_not_set)
+{
+	(void)directory;
+	(void)only_if_not_set;
+	return FALSE;
+}
+#endif /* HAVE_OPENDIR */
 
 void SYSROM_SetDefaults(void)
 {
