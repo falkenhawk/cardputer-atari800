@@ -33,6 +33,8 @@
 #define HAVE_STDINT_H 1
 #define HAVE_STDLIB_H 1
 #define HAVE_STRING_H 1
+#define HAVE_STRINGS_H 1       /* ESP-IDF newlib provides strings.h */
+#define HAVE_STRCASECMP 1      /* ESP-IDF newlib provides strcasecmp — prevents Util_stricmp fallback to nonexistent `stricmp` */
 #define HAVE_TIME_H 1
 
 /* Embedded: no file I/O beyond what we wrap */
@@ -40,5 +42,7 @@
 #undef HAVE_UNISTD_H
 #undef HAVE_OPENDIR
 #undef HAVE_GETTIMEOFDAY
+#undef HAVE_FCNTL_H
+#undef HAVE_SYS_STAT_H
 
 #endif /* CONFIG_H */
