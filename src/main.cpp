@@ -113,5 +113,5 @@ void loop() {
     last = now;
     Serial.printf("uptime %lu ms\n", now);
   }
-  delay(10);
+  delay(10);  // TODO(M3): remove; will conflict with audio frame pacing and Atari scheduler
 }
