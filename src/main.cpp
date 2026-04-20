@@ -6,8 +6,7 @@
 #include <SD.h>
 #include <SPI.h>
 
-// Cardputer-Adv SD card pins (from M5Cardputer hardware reference).
-// Confirm these against the schematic if the mount fails.
+// Cardputer-Adv SD card pins — verified on hardware.
 static constexpr int SD_PIN_SCK  = 40;
 static constexpr int SD_PIN_MISO = 39;
 static constexpr int SD_PIN_MOSI = 14;
