@@ -31,11 +31,33 @@ void setup() {
 }
 
 void loop() {
-  M5Cardputer.update();  // required each loop for keyboard/button state
+  M5Cardputer.update();
+
+  if (M5Cardputer.Keyboard.isChange()) {
+    auto status = M5Cardputer.Keyboard.keysState();
+
+    // print modifier state
+    Serial.print("keys:");
+    if (status.ctrl)  Serial.print(" CTRL");
+    if (status.shift) Serial.print(" SHIFT");
+    if (status.alt)   Serial.print(" ALT");
+    if (status.fn)    Serial.print(" FN");
+    if (status.opt)   Serial.print(" OPT");  // dedicated Opt key (2nd from left on bottom row)
+
+    // print printable characters
+    for (auto c : status.word) {
+      Serial.printf(" '%c'(0x%02x)", c, c);
+    }
+    // print HID key codes (for non-printable keys like Enter, Esc, Backspace)
+    for (auto k : status.hid_keys) {
+      Serial.printf(" hid=0x%02x", k);
+    }
+    Serial.println();
+  }
 
   static uint32_t last = 0;
   uint32_t now = millis();
-  if (now - last >= 5000) {
+  if (now - last >= 10000) {
     last = now;
     Serial.printf("uptime %lu ms\n", now);
   }
