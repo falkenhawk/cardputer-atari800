@@ -20,6 +20,15 @@
 
 **Testing approach:** Embedded hardware bring-up is not strictly TDD-able — most tasks require a physical device. Tasks with pure logic (none in M1) get unit tests. Tasks requiring hardware have an explicit **HUMAN CHECKPOINT** step where the human flashes and observes. Do NOT mark a task complete until the human has confirmed the observation.
 
+**Flashing workflow:** The user keeps [bmorcelli/Launcher](https://github.com/bmorcelli/Launcher) (M5Launcher) as the persistent boot firmware on the Cardputer-Adv and flashes `cardputer-atari800.bin` as an OTA app. This means:
+
+- Build produces `.pio/build/cardputer-adv/firmware.bin` (raw app image, no bootloader/partition table — which is exactly what Launcher expects).
+- To flash: either copy the bin to the SD card (M5Launcher's SD browser picks it up) or upload via M5Launcher's WUI (WiFi web UI). Launcher writes it to the inactive OTA app slot and reboots into it.
+- `pio run -t upload` (direct esptool flash) is NOT used for M1 testing because it would overwrite M5Launcher. Keep it as a fallback for the day the user wants cardputer-atari800 to be the boot firmware.
+- Serial monitoring works identically either way: `pio device monitor -e cardputer-adv` reads the USB CDC serial of whatever app is currently running.
+
+**Implication for Task 7 (custom partitions):** Launcher's partition layout is what's actually in flash at runtime on the user's device. Our `partitions.csv` from Task 7 only applies if someone flashes this firmware directly (not via Launcher). We still create it so that path stays viable, but M1 verification happens under Launcher's partition layout.
+
 ---
 
 ### Task 1: Initialize PlatformIO project
@@ -341,6 +350,7 @@ void loop() {
     if (status.shift) Serial.print(" SHIFT");
     if (status.alt)   Serial.print(" ALT");
     if (status.fn)    Serial.print(" FN");
+    if (status.opt)   Serial.print(" OPT");  // dedicated Opt key (2nd from left on bottom row)
 
     // print printable characters
     for (auto c : status.word) {
