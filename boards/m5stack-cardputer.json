@@ -1,4 +1,5 @@
 {
+  "_comment": "variant m5stack_atoms3 is a placeholder: arduino-esp32 has no m5stack_cardputer variant yet. M5Cardputer library handles Cardputer-specific pin mapping at runtime.",
   "build": {
     "arduino": {
       "ldscript": "esp32s3_out.ld",
