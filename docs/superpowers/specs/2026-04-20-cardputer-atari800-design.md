@@ -71,7 +71,7 @@ M5Cardputer speaks to the chips. Upstream `atari800` updates can be merged witho
 
 ```
 cardputer-atari800/
-├── platformio.ini                # board = m5stack-cardputer-adv, deps, partitions
+├── platformio.ini                # board target for Cardputer-Adv (exact ID verified at build time), deps, partitions
 ├── partitions.csv                # 8 MB flash layout (firmware + OTA reserve + SD-unavailable fallback data)
 ├── lib/
 │   ├── atari800/                 # vendored upstream core, lightly patched for ESP32-S3
@@ -300,6 +300,13 @@ or dual-cluster joystick.
     Display: Stretch       →
     Input:   Joystick      →
     Dual POKEY: off / on
+    ─────────
+    Console buttons:         ← visual grouping in the "Console buttons"
+      Help   (Fn+6)             submenu mirrors the physical top-right
+      Start  (Fn+3)             order of the real 65XE keyboard
+      Select (Fn+2)             (Help / Start / Select / Option / Reset),
+      Option (Fn+1)             even though the Fn+N bindings follow the
+      Reset  (Fn+4)             atari800 F-key software convention.
     ─────────
     Exit to browser
 ```
