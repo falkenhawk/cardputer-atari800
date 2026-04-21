@@ -47,21 +47,27 @@ static constexpr int SD_PIN_CS   = 12;
 static bool sd_mounted = false;
 
 static bool mount_sd() {
-  // M5Launcher mounts the SD via SD_MMC (1-bit SDIO) and jumps to our app
-  // without fully resetting peripherals. The SDMMC hardware still "owns"
-  // the SD bus, so our SPI-based SD.begin() sees "no card". Reset the
-  // SDMMC peripheral to release the bus, then proceed as M5Stack's own
-  // sdcard.ino example does.
+  // M5Launcher mounts the SD via SD_MMC (1-bit SDIO) and hands off to app1
+  // without fully resetting peripherals or VFS state. Three things can be
+  // left lingering from Launcher's session:
+  //
+  //   (a) SDMMC hardware peripheral still claims the SD signals
+  //       → fix: periph_module_reset(PERIPH_SDMMC_MODULE)
+  //   (b) VFS registration of the mount path from our own previous mount
+  //       → fix: SD.end() (no-op if nothing mounted)
+  //   (c) mount-path namespace clash (Launcher uses /sdcard)
+  //       → fix: use the same "/sdcard" path ourselves
   periph_module_reset(PERIPH_SDMMC_MODULE);
   delay(10);
+  SD.end();
 
   SPI.begin(SD_PIN_SCK, SD_PIN_MISO, SD_PIN_MOSI, SD_PIN_CS);
-  if (!SD.begin(SD_PIN_CS, SPI, 25000000)) {
+  if (!SD.begin(SD_PIN_CS, SPI, 25000000, "/sdcard")) {
     Serial.println("SD: mount failed (no card? wrong format? pins held?)");
     return false;
   }
   uint64_t size_mb = SD.cardSize() / (1024 * 1024);
-  Serial.printf("SD: mounted, %llu MB\n", size_mb);
+  Serial.printf("SD: mounted at /sdcard, %llu MB\n", size_mb);
   return true;
 }
 
@@ -219,12 +225,17 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.2-m2-t14d");
+  d.print("v0.2-m2-t14e");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");
 
   Serial.println("splash rendered");
+
+  // Hold the splash on-screen for 2 seconds so a human can read the version
+  // string before the LCD gets taken over by the emulator frame renderer.
+  // Remove this delay once builds stabilize (M3+).
+  delay(2000);
 
   sd_mounted = mount_sd();
   if (sd_mounted) {
