@@ -35,7 +35,12 @@
 #define MEMORY_dCopyToMem(from, to, size)		memcpy(MEMORY_mem + (to), from, size)
 #define MEMORY_dFillMem(addr1, value, length)	memset(MEMORY_mem + (addr1), value, length)
 
+#ifdef CARDPUTER_ATARI800
+extern UBYTE *MEMORY_mem;
+extern void ensure_memory_mem_allocated(void);
+#else
 extern UBYTE MEMORY_mem[65536 + 2];
+#endif
 
 /* RAM size in kilobytes.
    Valid values for Atari800_MACHINE_800 are: 16, 48, 52.

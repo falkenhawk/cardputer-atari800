@@ -48,7 +48,20 @@ extern void *ps_malloc(size_t size);
 #include "statesav.h"
 #endif
 
+#ifdef CARDPUTER_ATARI800
+/* MEMORY_mem moved to heap to free another 64 KB of contiguous DRAM.
+   Allocated lazily on first call to ensure_memory_mem_allocated(). */
+UBYTE *MEMORY_mem = NULL;
+
+void ensure_memory_mem_allocated(void) {
+	if (!MEMORY_mem) {
+		MEMORY_mem = (UBYTE*) ps_malloc(65538);
+		if (!MEMORY_mem) MEMORY_mem = (UBYTE*) malloc(65538);
+	}
+}
+#else
 UBYTE MEMORY_mem[65536 + 2];
+#endif /* CARDPUTER_ATARI800 */
 
 int MEMORY_ram_size = 64;
 
@@ -225,7 +238,8 @@ void MEMORY_InitialiseMachine(void)
 	                    : 0x4000;
 	int const os_rom_start = 0x10000 - os_size;
 #ifdef CARDPUTER_ATARI800
-	/* allocate MEMORY_attrib and shadow-RAM buffers from PSRAM on first call */
+	/* allocate MEMORY_mem, MEMORY_attrib and shadow-RAM buffers from PSRAM on first call */
+	ensure_memory_mem_allocated();
 	ensure_memory_attrib_allocated();
 	if (!under_atarixl_os) {
 		under_atarixl_os = (UBYTE*)ps_malloc(16384);

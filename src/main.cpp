@@ -18,6 +18,8 @@ extern "C" {
 
 extern "C" void ensure_memory_attrib_allocated(void);
 extern "C" UBYTE *MEMORY_attrib;
+extern "C" void ensure_memory_mem_allocated(void);
+extern "C" UBYTE *MEMORY_mem;
 
 // Cardputer-Adv SD card pins — verified on hardware.
 static constexpr int SD_PIN_SCK  = 40;
@@ -105,6 +107,17 @@ void setup() {
     Serial.println("MEMORY_attrib: ALLOC FAILED — core init will crash");
   }
   Serial.printf("heap@post-attrib-alloc: free=%u\n", (unsigned)ESP.getFreeHeap());
+
+  // ---- Pre-allocate MEMORY_mem (65538 bytes). Frees another 64 KB of static
+  //      DRAM so Screen_atari + MEMORY_attrib + MEMORY_mem all fit in the
+  //      available heap without fragmenting into sub-65 KB chunks.
+  ensure_memory_mem_allocated();
+  if (MEMORY_mem) {
+    Serial.printf("MEMORY_mem: pre-allocated @ %p\n", (void*)MEMORY_mem);
+  } else {
+    Serial.println("MEMORY_mem: ALLOC FAILED — core init will crash");
+  }
+  Serial.printf("heap@post-mem-alloc: free=%u\n", (unsigned)ESP.getFreeHeap());
 
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);  // true = enableKeyboard (default)
