@@ -5,12 +5,6 @@
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <SPI.h>
-#include <esp_vfs.h>  // esp_vfs_unregister() — clears the VFS path entry.
-#include <diskio_impl.h> // ff_diskio_register() — passing NULL impl releases
-                         // a FatFs drive slot that a prior firmware's SDMMC
-                         // driver left allocated. Without this release,
-                         // sdcard_init silently returns 0xFF (no free slot)
-                         // and SD.begin fails without any log output.
 #include <errno.h>
 
 #include "display/lcd.h"
@@ -40,48 +34,29 @@ static const char* mode_name(renderer::Mode m) {
   return "?";
 }
 
-// Cardputer-Adv SD pins (same layout as geo-tp/Game-Station and M5 examples).
+// Cardputer-Adv SD pins per M5Stack's own M5Cardputer/examples/Basic/sdcard.ino
 static constexpr int SD_PIN_SCK  = 40;
 static constexpr int SD_PIN_MISO = 39;
 static constexpr int SD_PIN_MOSI = 14;
 static constexpr int SD_PIN_CS   = 12;
 
-// Dedicated SPI bus instance for SD. By NOT using the global `SPI` object we
-// get an independent bus slot so our SD init doesn't collide with whatever
-// M5GFX/M5Cardputer or a prior firmware's session left claimed on the global.
-// This is the key trick from Game Station's SdService that the stock M5 SD
-// example doesn't use.
-static SPIClass sdCardSPI;
-
 static bool sd_mounted = false;
 
 static bool mount_sd() {
-  // Three-layer cleanup for Launcher-handoff state:
-  //   1. VFS path — clear both /sdcard (Launcher) and /sd (our own).
-  //   2. FatFs drive slot — ff_diskio_register(pdrv, NULL) releases the
-  //      slot so ff_diskio_get_drive() can hand it back to sdcard_init.
-  //   3. All subsequent init is standard Arduino SD pattern.
-  esp_vfs_unregister("/sdcard");
-  esp_vfs_unregister("/sd");
-  ff_diskio_register(0, NULL);
-  ff_diskio_register(1, NULL);
-
-  sdCardSPI.begin(SD_PIN_SCK, SD_PIN_MISO, SD_PIN_MOSI, SD_PIN_CS);
-  delay(10);
-
-  // Try two speeds, fast-first. Same pattern Game Station uses on real
-  // Cardputer hardware.
-  const uint32_t speeds[] = { 40000000u, 20000000u };
-  for (uint32_t hz : speeds) {
-    if (SD.begin(SD_PIN_CS, sdCardSPI, hz, "/sd")) {
-      uint64_t size_mb = SD.cardSize() / (1024 * 1024);
-      Serial.printf("SD: mounted at /sd @ %u Hz, %llu MB\n", (unsigned)hz, size_mb);
-      return true;
-    }
-    Serial.printf("SD: mount failed @ %u Hz, trying next speed\n", (unsigned)hz);
+  // Absolute-minimum mount per M5Stack's official example. Previous attempts
+  // at "defensive cleanup" (esp_vfs_unregister, ff_diskio_register(NULL),
+  // periph_module_reset) all made the mount WORSE by leaving the VFS
+  // subsystem in a partially-initialized state that esp_vfs_fat_register
+  // then rejects with ESP_ERR_INVALID_STATE. The minimum works on cold boot;
+  // if M5Launcher handoff breaks it, that's a separate known limitation.
+  SPI.begin(SD_PIN_SCK, SD_PIN_MISO, SD_PIN_MOSI, SD_PIN_CS);
+  if (!SD.begin(SD_PIN_CS, SPI, 25000000)) {
+    Serial.println("SD: mount failed (no card? wrong format? first boot after Launcher handoff?)");
+    return false;
   }
-  Serial.println("SD: all speeds failed (no card? wrong format? pins busy?)");
-  return false;
+  uint64_t size_mb = SD.cardSize() / (1024 * 1024);
+  Serial.printf("SD: mounted, %llu MB\n", size_mb);
+  return true;
 }
 
 static void list_sd_root() {
@@ -236,7 +211,7 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.2-m2-t14i");
+  d.print("v0.2-m2-t14j");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");
