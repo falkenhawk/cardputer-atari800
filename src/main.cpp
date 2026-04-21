@@ -16,6 +16,9 @@ extern "C" {
 #include "../lib/atari800/src/screen.h"
 }
 
+extern "C" void ensure_memory_attrib_allocated(void);
+extern "C" UBYTE *MEMORY_attrib;
+
 // Cardputer-Adv SD card pins — verified on hardware.
 static constexpr int SD_PIN_SCK  = 40;
 static constexpr int SD_PIN_MISO = 39;
@@ -92,6 +95,16 @@ void setup() {
 
   size_t free1 = ESP.getFreeHeap();
   Serial.printf("heap@post-alloc: free=%u\n", (unsigned)free1);
+
+  // ---- Pre-allocate MEMORY_attrib (65538 bytes) before M5Cardputer.begin()
+  //      eats the heap. Same reason as Screen_atari.
+  ensure_memory_attrib_allocated();
+  if (MEMORY_attrib) {
+    Serial.printf("MEMORY_attrib: pre-allocated @ %p\n", (void*)MEMORY_attrib);
+  } else {
+    Serial.println("MEMORY_attrib: ALLOC FAILED — core init will crash");
+  }
+  Serial.printf("heap@post-attrib-alloc: free=%u\n", (unsigned)ESP.getFreeHeap());
 
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);  // true = enableKeyboard (default)

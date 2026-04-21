@@ -54,6 +54,7 @@ extern int MEMORY_ram_size;
 
 #ifdef CARDPUTER_ATARI800
 extern UBYTE *MEMORY_attrib;
+extern void ensure_memory_attrib_allocated(void);
 #else
 extern UBYTE MEMORY_attrib[65536];
 #endif

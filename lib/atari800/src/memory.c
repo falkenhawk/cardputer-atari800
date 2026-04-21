@@ -59,10 +59,10 @@ int MEMORY_ram_size = 64;
    Allocated lazily on first call to MEMORY_InitialiseMachine. */
 UBYTE *MEMORY_attrib = NULL;
 
-static void ensure_memory_attrib_allocated(void) {
+void ensure_memory_attrib_allocated(void) {
 	if (!MEMORY_attrib) {
-		MEMORY_attrib = (UBYTE*) ps_malloc(65536);
-		if (!MEMORY_attrib) MEMORY_attrib = (UBYTE*) malloc(65536);
+		MEMORY_attrib = (UBYTE*) ps_malloc(65538);
+		if (!MEMORY_attrib) MEMORY_attrib = (UBYTE*) malloc(65538);
 	}
 }
 #else
