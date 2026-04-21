@@ -5,11 +5,11 @@
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <SPI.h>
-// SD access follows geo-tp/Cardputer-Game-Station-Emulators's SdService
-// pattern: a DEDICATED SPIClass instance (not the global SPI object) so our
-// SPI bus is independent of whatever M5GFX / M5Cardputer / Launcher claimed.
-// The global-SPI contention (not VFS state) is what broke our previous
-// SD.begin() calls after Launcher's handoff.
+#include <esp_vfs.h>  // esp_vfs_unregister() — clears whichever FatFs slot
+                      // Launcher's SD_MMC session left registered. Without
+                      // this the Arduino SD.h mount fails with
+                      // esp_vfs_fat_register ESP_ERR_INVALID_STATE (0x101)
+                      // because the FatFs "0:" slot is still in use.
 #include <errno.h>
 
 #include "display/lcd.h"
@@ -55,6 +55,14 @@ static SPIClass sdCardSPI;
 static bool sd_mounted = false;
 
 static bool mount_sd() {
+  // Unregister any VFS mounts a prior firmware (M5Launcher) may have left
+  // behind. esp_vfs_unregister is a no-op if nothing was registered at the
+  // given base path, so this is safe to always call. Without this, SD.begin
+  // fails with ESP_ERR_INVALID_STATE (0x101) because the underlying FatFs
+  // library still sees the "0:" volume as in-use.
+  esp_vfs_unregister("/sdcard");   // Launcher's SD_MMC path
+  esp_vfs_unregister("/sd");       // our own (in case of re-mount attempts)
+
   sdCardSPI.begin(SD_PIN_SCK, SD_PIN_MISO, SD_PIN_MOSI, SD_PIN_CS);
   delay(10);
 
@@ -225,7 +233,7 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.2-m2-t14f");
+  d.print("v0.2-m2-t14g");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");
