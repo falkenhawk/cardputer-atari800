@@ -5,10 +5,11 @@
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <SPI.h>
-#include <driver/periph_ctrl.h>   // periph_module_reset() — clears SDMMC
-                                  // peripheral state left behind when
-                                  // M5Launcher (which uses SD_MMC) hands
-                                  // control off to us (which uses SD via SPI).
+// SD access follows geo-tp/Cardputer-Game-Station-Emulators's SdService
+// pattern: a DEDICATED SPIClass instance (not the global SPI object) so our
+// SPI bus is independent of whatever M5GFX / M5Cardputer / Launcher claimed.
+// The global-SPI contention (not VFS state) is what broke our previous
+// SD.begin() calls after Launcher's handoff.
 #include <errno.h>
 
 #include "display/lcd.h"
@@ -38,37 +39,38 @@ static const char* mode_name(renderer::Mode m) {
   return "?";
 }
 
-// Cardputer-Adv SD pins per M5Stack official M5Cardputer/examples/Basic/sdcard.
+// Cardputer-Adv SD pins (same layout as geo-tp/Game-Station and M5 examples).
 static constexpr int SD_PIN_SCK  = 40;
 static constexpr int SD_PIN_MISO = 39;
 static constexpr int SD_PIN_MOSI = 14;
 static constexpr int SD_PIN_CS   = 12;
 
+// Dedicated SPI bus instance for SD. By NOT using the global `SPI` object we
+// get an independent bus slot so our SD init doesn't collide with whatever
+// M5GFX/M5Cardputer or a prior firmware's session left claimed on the global.
+// This is the key trick from Game Station's SdService that the stock M5 SD
+// example doesn't use.
+static SPIClass sdCardSPI;
+
 static bool sd_mounted = false;
 
 static bool mount_sd() {
-  // M5Launcher mounts the SD via SD_MMC (1-bit SDIO) and hands off to app1
-  // without fully resetting peripherals or VFS state. Three things can be
-  // left lingering from Launcher's session:
-  //
-  //   (a) SDMMC hardware peripheral still claims the SD signals
-  //       → fix: periph_module_reset(PERIPH_SDMMC_MODULE)
-  //   (b) VFS registration of the mount path from our own previous mount
-  //       → fix: SD.end() (no-op if nothing mounted)
-  //   (c) mount-path namespace clash (Launcher uses /sdcard)
-  //       → fix: use the same "/sdcard" path ourselves
-  periph_module_reset(PERIPH_SDMMC_MODULE);
+  sdCardSPI.begin(SD_PIN_SCK, SD_PIN_MISO, SD_PIN_MOSI, SD_PIN_CS);
   delay(10);
-  SD.end();
 
-  SPI.begin(SD_PIN_SCK, SD_PIN_MISO, SD_PIN_MOSI, SD_PIN_CS);
-  if (!SD.begin(SD_PIN_CS, SPI, 25000000, "/sdcard")) {
-    Serial.println("SD: mount failed (no card? wrong format? pins held?)");
-    return false;
+  // Try two speeds, fast-first. Same pattern Game Station uses on real
+  // Cardputer hardware.
+  const uint32_t speeds[] = { 40000000u, 20000000u };
+  for (uint32_t hz : speeds) {
+    if (SD.begin(SD_PIN_CS, sdCardSPI, hz, "/sd")) {
+      uint64_t size_mb = SD.cardSize() / (1024 * 1024);
+      Serial.printf("SD: mounted at /sd @ %u Hz, %llu MB\n", (unsigned)hz, size_mb);
+      return true;
+    }
+    Serial.printf("SD: mount failed @ %u Hz, trying next speed\n", (unsigned)hz);
   }
-  uint64_t size_mb = SD.cardSize() / (1024 * 1024);
-  Serial.printf("SD: mounted at /sdcard, %llu MB\n", size_mb);
-  return true;
+  Serial.println("SD: all speeds failed (no card? wrong format? pins busy?)");
+  return false;
 }
 
 static void list_sd_root() {
@@ -108,8 +110,6 @@ static bool try_load_xex(const char* path) {
     return false;
   }
 
-  // Heap buffer — freed before Atari800_Coldstart. Heap is tight (~36 KB free
-  // at runtime); if malloc fails we bail gracefully.
   uint8_t* xex_buf = (uint8_t*) malloc(flen);
   if (!xex_buf) {
     Serial.printf("xex: malloc(%u) failed — heap too tight\n", (unsigned)flen);
@@ -225,7 +225,7 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.2-m2-t14e");
+  d.print("v0.2-m2-t14f");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");
