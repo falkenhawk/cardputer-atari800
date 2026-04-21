@@ -18,6 +18,12 @@
    and treats them as the default-available ROMs. */
 #define EMUOS_ALTIRRA 1
 
+/* Use page-based MEMORY_attrib instead of a flat 65 KB array.
+   Replaces the 64 KB RAM/ROM/HARDWARE map with 256 page pointers
+   (~1 KB) + per-page dispatch. Saves ~63 KB of heap pressure —
+   the ADV has only 205 KB contiguous DRAM after M1/M2 static data. */
+#define PAGED_ATTRIB 1
+
 /* Features we disable for embedded build */
 #undef SOUND                  /* M3 will enable */
 #undef STEREO_SOUND

@@ -238,9 +238,12 @@ void MEMORY_InitialiseMachine(void)
 	                    : 0x4000;
 	int const os_rom_start = 0x10000 - os_size;
 #ifdef CARDPUTER_ATARI800
-	/* allocate MEMORY_mem, MEMORY_attrib and shadow-RAM buffers from PSRAM on first call */
+	/* allocate MEMORY_mem and shadow-RAM buffers from PSRAM on first call */
 	ensure_memory_mem_allocated();
+#ifndef PAGED_ATTRIB
+	/* MEMORY_attrib only exists in the flat-array path; PAGED_ATTRIB uses readmap/writemap instead */
 	ensure_memory_attrib_allocated();
+#endif
 	if (!under_atarixl_os) {
 		under_atarixl_os = (UBYTE*)ps_malloc(16384);
 		if (!under_atarixl_os) under_atarixl_os = (UBYTE*)malloc(16384);

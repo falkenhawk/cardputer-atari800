@@ -16,8 +16,6 @@ extern "C" {
 #include "../lib/atari800/src/screen.h"
 }
 
-extern "C" void ensure_memory_attrib_allocated(void);
-extern "C" UBYTE *MEMORY_attrib;
 extern "C" void ensure_memory_mem_allocated(void);
 extern "C" UBYTE *MEMORY_mem;
 
@@ -98,19 +96,9 @@ void setup() {
   size_t free1 = ESP.getFreeHeap();
   Serial.printf("heap@post-alloc: free=%u\n", (unsigned)free1);
 
-  // ---- Pre-allocate MEMORY_attrib (65538 bytes) before M5Cardputer.begin()
-  //      eats the heap. Same reason as Screen_atari.
-  ensure_memory_attrib_allocated();
-  if (MEMORY_attrib) {
-    Serial.printf("MEMORY_attrib: pre-allocated @ %p\n", (void*)MEMORY_attrib);
-  } else {
-    Serial.println("MEMORY_attrib: ALLOC FAILED — core init will crash");
-  }
-  Serial.printf("heap@post-attrib-alloc: free=%u\n", (unsigned)ESP.getFreeHeap());
-
   // ---- Pre-allocate MEMORY_mem (65538 bytes). Frees another 64 KB of static
-  //      DRAM so Screen_atari + MEMORY_attrib + MEMORY_mem all fit in the
-  //      available heap without fragmenting into sub-65 KB chunks.
+  //      DRAM so Screen_atari + MEMORY_mem both fit in the available heap
+  //      without fragmenting into sub-65 KB chunks.
   ensure_memory_mem_allocated();
   if (MEMORY_mem) {
     Serial.printf("MEMORY_mem: pre-allocated @ %p\n", (void*)MEMORY_mem);
