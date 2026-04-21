@@ -52,7 +52,11 @@ extern int MEMORY_ram_size;
 
 #ifndef PAGED_ATTRIB
 
+#ifdef CARDPUTER_ATARI800
+extern UBYTE *MEMORY_attrib;
+#else
 extern UBYTE MEMORY_attrib[65536];
+#endif
 /* Reads a byte from ADDR. Can potentially have side effects, when reading
    from hardware area. */
 #define MEMORY_GetByte(addr)		(MEMORY_attrib[addr] == MEMORY_HARDWARE ? MEMORY_HwGetByte(addr, FALSE) : MEMORY_mem[addr])

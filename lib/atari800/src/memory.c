@@ -54,7 +54,20 @@ int MEMORY_ram_size = 64;
 
 #ifndef PAGED_ATTRIB
 
+#ifdef CARDPUTER_ATARI800
+/* MEMORY_attrib moved to heap to free 64 KB of contiguous DRAM for Screen_atari.
+   Allocated lazily on first call to MEMORY_InitialiseMachine. */
+UBYTE *MEMORY_attrib = NULL;
+
+static void ensure_memory_attrib_allocated(void) {
+	if (!MEMORY_attrib) {
+		MEMORY_attrib = (UBYTE*) ps_malloc(65536);
+		if (!MEMORY_attrib) MEMORY_attrib = (UBYTE*) malloc(65536);
+	}
+}
+#else
 UBYTE MEMORY_attrib[65536];
+#endif /* CARDPUTER_ATARI800 */
 
 #else /* PAGED_ATTRIB */
 
@@ -212,7 +225,8 @@ void MEMORY_InitialiseMachine(void)
 	                    : 0x4000;
 	int const os_rom_start = 0x10000 - os_size;
 #ifdef CARDPUTER_ATARI800
-	/* allocate shadow-RAM buffers from PSRAM on first call */
+	/* allocate MEMORY_attrib and shadow-RAM buffers from PSRAM on first call */
+	ensure_memory_attrib_allocated();
 	if (!under_atarixl_os) {
 		under_atarixl_os = (UBYTE*)ps_malloc(16384);
 		if (!under_atarixl_os) under_atarixl_os = (UBYTE*)malloc(16384);
