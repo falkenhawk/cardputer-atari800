@@ -14,11 +14,13 @@ extern "C" {
 #include "../lib/atari800/src/atari.h"
 #include "../lib/atari800/port.h"
 #include "../lib/atari800/src/screen.h"
+#include "../lib/atari800/src/memory.h"
 }
+
+#include "storage/loader.h"
 
 extern "C" void ensure_memory_mem_allocated(void);
 extern "C" void ensure_under_buffers_allocated(void);
-extern "C" UBYTE *MEMORY_mem;
 
 static renderer::Mode g_display_mode = renderer::Mode::Stretch;
 
@@ -69,6 +71,75 @@ static void list_sd_root() {
     f.close();
   }
   root.close();
+}
+
+// M2 hardcoded .xex loader — reads a .xex from SD, pokes its segments into
+// MEMORY_mem[], writes RUNAD/INITAD vectors, and Coldstarts the Atari.
+// M4 will replace this with a proper file browser.
+static bool try_load_xex(const char* path) {
+  if (!sd_mounted) {
+    Serial.printf("xex: SD not mounted, skipping %s\n", path);
+    return false;
+  }
+  File f = SD.open(path, FILE_READ);
+  if (!f) {
+    Serial.printf("xex: %s not found\n", path);
+    return false;
+  }
+  size_t flen = f.size();
+  if (flen == 0 || flen > 64 * 1024) {
+    Serial.printf("xex: bad size %u (max 64 KB)\n", (unsigned)flen);
+    f.close();
+    return false;
+  }
+
+  // Heap buffer — freed before Atari800_Coldstart. Heap is tight (~36 KB free
+  // at runtime); if malloc fails we bail gracefully.
+  uint8_t* xex_buf = (uint8_t*) malloc(flen);
+  if (!xex_buf) {
+    Serial.printf("xex: malloc(%u) failed — heap too tight\n", (unsigned)flen);
+    f.close();
+    return false;
+  }
+  size_t nread = f.read(xex_buf, flen);
+  f.close();
+  if (nread != flen) {
+    Serial.printf("xex: short read %u/%u\n", (unsigned)nread, (unsigned)flen);
+    free(xex_buf);
+    return false;
+  }
+
+  xex_parsed_t p;
+  if (!xex_parse(xex_buf, flen, &p)) {
+    Serial.println("xex: parse failed");
+    free(xex_buf);
+    return false;
+  }
+
+  // Poke segments into Atari RAM.
+  for (int i = 0; i < p.n_segs; i++) {
+    const xex_segment_t& s = p.segs[i];
+    for (size_t b = 0; b < s.data_len; b++) {
+      MEMORY_mem[s.start_addr + b] = s.data[b];
+    }
+  }
+
+  // Set the run / init vectors in page 2.
+  if (p.run_addr) {
+    MEMORY_mem[0x02E0] = p.run_addr & 0xFF;
+    MEMORY_mem[0x02E1] = (p.run_addr >> 8) & 0xFF;
+  }
+  if (p.init_addr) {
+    MEMORY_mem[0x02E2] = p.init_addr & 0xFF;
+    MEMORY_mem[0x02E3] = (p.init_addr >> 8) & 0xFF;
+  }
+
+  Serial.printf("xex: loaded %d segments from %s, RUN=0x%04X, INIT=0x%04X\n",
+                p.n_segs, path, p.run_addr, p.init_addr);
+
+  free(xex_buf);
+  Atari800_Coldstart();
+  return true;
 }
 
 void setup() {
@@ -139,10 +210,10 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.2-m2-t17");
+  d.print("v0.2-m2-t14");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  d.print("modes: Fn+\\ cycle");
+  d.print("xex: Fn+\\ modes");
 
   Serial.println("splash rendered");
 
@@ -182,6 +253,10 @@ void setup() {
 
   size_t free_heap = ESP.getFreeHeap();
   Serial.printf("heap: free=%u bytes after core init\n", (unsigned)free_heap);
+
+  // Try to boot a hardcoded test .xex. If absent, AltirraOS's default
+  // prompt stays visible (the non-booted state we saw in T12).
+  try_load_xex("/atari800/test.xex");
 }
 
 void loop() {
