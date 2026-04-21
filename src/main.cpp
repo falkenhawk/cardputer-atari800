@@ -3,10 +3,12 @@
 
 #include <Arduino.h>
 #include <M5Cardputer.h>
-#include <SD_MMC.h>   // 1-bit SDIO mode — matches what M5Launcher uses so we
-                      // can share the SD bus across soft resets without conflict.
-                      // (SPI-based SD.h doesn't work when the SDIO peripheral
-                      // has been claimed by a prior firmware on the same chip.)
+#include <SD.h>
+#include <SPI.h>
+#include <driver/periph_ctrl.h>   // periph_module_reset() — clears SDMMC
+                                  // peripheral state left behind when
+                                  // M5Launcher (which uses SD_MMC) hands
+                                  // control off to us (which uses SD via SPI).
 #include <errno.h>
 
 #include "display/lcd.h"
@@ -36,24 +38,35 @@ static const char* mode_name(renderer::Mode m) {
   return "?";
 }
 
+// Cardputer-Adv SD pins per M5Stack official M5Cardputer/examples/Basic/sdcard.
+static constexpr int SD_PIN_SCK  = 40;
+static constexpr int SD_PIN_MISO = 39;
+static constexpr int SD_PIN_MOSI = 14;
+static constexpr int SD_PIN_CS   = 12;
+
 static bool sd_mounted = false;
 
 static bool mount_sd() {
-  // Use SD_MMC (native SDIO interface) in 1-bit mode — matches what
-  // bmorcelli/Launcher does, so we can share the SD bus across soft
-  // resets without the peripheral-state conflict that broke SPI-based
-  // SD.begin() after Launcher's hand-off.
-  if (SD_MMC.begin("/sdcard", true)) {
-    uint64_t size_mb = SD_MMC.cardSize() / (1024 * 1024);
-    Serial.printf("SD: mounted (SDIO 1-bit), %llu MB\n", size_mb);
-    return true;
+  // M5Launcher mounts the SD via SD_MMC (1-bit SDIO) and jumps to our app
+  // without fully resetting peripherals. The SDMMC hardware still "owns"
+  // the SD bus, so our SPI-based SD.begin() sees "no card". Reset the
+  // SDMMC peripheral to release the bus, then proceed as M5Stack's own
+  // sdcard.ino example does.
+  periph_module_reset(PERIPH_SDMMC_MODULE);
+  delay(10);
+
+  SPI.begin(SD_PIN_SCK, SD_PIN_MISO, SD_PIN_MOSI, SD_PIN_CS);
+  if (!SD.begin(SD_PIN_CS, SPI, 25000000)) {
+    Serial.println("SD: mount failed (no card? wrong format? pins held?)");
+    return false;
   }
-  Serial.println("SD: SD_MMC.begin failed (no card? unformatted? SDIO pins wrong?)");
-  return false;
+  uint64_t size_mb = SD.cardSize() / (1024 * 1024);
+  Serial.printf("SD: mounted, %llu MB\n", size_mb);
+  return true;
 }
 
 static void list_sd_root() {
-  File root = SD_MMC.open("/");
+  File root = SD.open("/");
   if (!root) {
     Serial.println("SD: could not open root");
     return;
@@ -77,7 +90,7 @@ static bool try_load_xex(const char* path) {
     Serial.printf("xex: SD not mounted, skipping %s\n", path);
     return false;
   }
-  File f = SD_MMC.open(path, FILE_READ);
+  File f = SD.open(path, FILE_READ);
   if (!f) {
     Serial.printf("xex: %s not found\n", path);
     return false;
@@ -206,7 +219,7 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.2-m2-t14c");
+  d.print("v0.2-m2-t14d");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");
