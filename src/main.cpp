@@ -19,6 +19,18 @@ extern "C" {
 extern "C" void ensure_memory_mem_allocated(void);
 extern "C" UBYTE *MEMORY_mem;
 
+static renderer::Mode g_display_mode = renderer::Mode::Stretch;
+
+static const char* mode_name(renderer::Mode m) {
+  switch (m) {
+    case renderer::Mode::PixelPerfect: return "Pixel-perfect";
+    case renderer::Mode::Pillarbox:    return "Pillarbox";
+    case renderer::Mode::Cover:        return "Cover";
+    case renderer::Mode::Stretch:      return "Stretch";
+  }
+  return "?";
+}
+
 // Cardputer-Adv SD card pins — verified on hardware.
 static constexpr int SD_PIN_SCK  = 40;
 static constexpr int SD_PIN_MISO = 39;
@@ -179,6 +191,17 @@ void loop() {
     if (status.opt)   Serial.print(" OPT");
     for (auto c : status.word)     Serial.printf(" '%c'(0x%02x)", c, c);
     for (auto k : status.hid_keys) Serial.printf(" hid=0x%02x", k);
+    // Fn+\ cycles display mode (M2 shortcut; full Fn layer comes in M3).
+    if (status.fn) {
+      for (auto c : status.word) {
+        if (c == '\\') {
+          g_display_mode = static_cast<renderer::Mode>(
+            (static_cast<int>(g_display_mode) + 1) % 4);
+          renderer::set_mode(g_display_mode);
+          Serial.printf("display: %s\n", mode_name(g_display_mode));
+        }
+      }
+    }
     Serial.println();
   }
 
