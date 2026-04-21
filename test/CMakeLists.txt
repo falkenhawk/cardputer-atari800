@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-project(cardputer_atari800_tests C)
+project(cardputer_atari800_tests C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Enable warnings for every test executable. Locked in now so the pattern
 # sticks as new tests are added in M2+.
@@ -14,3 +16,7 @@ enable_testing()
 
 add_executable(test_sanity test_sanity.c)
 add_test(NAME sanity COMMAND test_sanity)
+
+add_executable(test_palette test_palette.c ../src/display/palette.cpp)
+set_target_properties(test_palette PROPERTIES LINKER_LANGUAGE CXX)
+add_test(NAME palette COMMAND test_palette)
