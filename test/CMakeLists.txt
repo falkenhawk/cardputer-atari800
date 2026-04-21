@@ -20,3 +20,7 @@ add_test(NAME sanity COMMAND test_sanity)
 add_executable(test_palette test_palette.c ../src/display/palette.cpp)
 set_target_properties(test_palette PROPERTIES LINKER_LANGUAGE CXX)
 add_test(NAME palette COMMAND test_palette)
+
+add_executable(test_projector test_projector.c ../src/display/projector.cpp)
+set_target_properties(test_projector PROPERTIES LINKER_LANGUAGE CXX)
+add_test(NAME projector COMMAND test_projector)
