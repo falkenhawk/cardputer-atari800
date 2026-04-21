@@ -155,16 +155,16 @@ void setup() {
   Serial.printf("heap@entry: free=%u largest=%u psram=%u\n",
                 (unsigned)free0, (unsigned)largest0, (unsigned)ESP.getFreePsram());
 
-  // Try incremental alloc sizes to figure out where malloc fails
-  for (size_t sz : { (size_t)32768, (size_t)65536, (size_t)98304 }) {
-    void* p = malloc(sz);
-    if (p) {
-      Serial.printf("  malloc(%u) OK @ %p\n", (unsigned)sz, p);
-      free(p);
-    } else {
-      Serial.printf("  malloc(%u) FAILED (errno=%d)\n", (unsigned)sz, errno);
-    }
-  }
+  // ---- Mount SD card FIRST, while the heap is fresh ----
+  // esp_vfs_fat_register internally mallocs a few KB for FATFS state. If we
+  // mount AFTER the big Screen_atari / MEMORY_mem / under_* allocations, the
+  // heap is fragmented and that malloc fails with ESP_ERR_NO_MEM (error
+  // code 0x101 — not 0x103 "invalid state" as I spent hours chasing).
+  // Mounting now, at ~237 KB free with 196 KB largest block, gives FATFS
+  // plenty of contiguous space.
+  sd_mounted = mount_sd();
+  Serial.printf("heap@post-sd: free=%u largest=%u\n",
+                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 
   // ---- The real Screen_atari allocation ----
   constexpr size_t buf_bytes = 384 * (240 + 16);
@@ -211,7 +211,7 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.2-m2-t14j");
+  d.print("v0.2-m2-t14k");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");
@@ -223,11 +223,10 @@ void setup() {
   // Remove this delay once builds stabilize (M3+).
   delay(2000);
 
-  sd_mounted = mount_sd();
+  // SD was already mounted at the very top of setup(), before the heap got
+  // fragmented. Here we just report the result visually and list root.
   if (sd_mounted) {
     list_sd_root();
-
-    // also show mount status on LCD
     d.setCursor(8, 80);
     d.setTextColor(TFT_GREEN, TFT_BLACK);
     d.print("SD: mounted");
