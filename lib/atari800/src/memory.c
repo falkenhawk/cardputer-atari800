@@ -59,6 +59,7 @@ void ensure_memory_mem_allocated(void) {
 		if (!MEMORY_mem) MEMORY_mem = (UBYTE*) malloc(65538);
 	}
 }
+
 #else
 UBYTE MEMORY_mem[65536 + 2];
 #endif /* CARDPUTER_ATARI800 */
@@ -116,6 +117,21 @@ int MEMORY_selftest_enabled = 0;
 static UBYTE *under_atarixl_os = NULL;
 static UBYTE *under_cart809F   = NULL;
 static UBYTE *under_cartA0BF   = NULL;
+
+void ensure_under_buffers_allocated(void) {
+	if (!under_atarixl_os) {
+		under_atarixl_os = (UBYTE*)ps_malloc(16384);
+		if (!under_atarixl_os) under_atarixl_os = (UBYTE*)malloc(16384);
+	}
+	if (!under_cart809F) {
+		under_cart809F = (UBYTE*)ps_malloc(8192);
+		if (!under_cart809F) under_cart809F = (UBYTE*)malloc(8192);
+	}
+	if (!under_cartA0BF) {
+		under_cartA0BF = (UBYTE*)ps_malloc(8192);
+		if (!under_cartA0BF) under_cartA0BF = (UBYTE*)malloc(8192);
+	}
+}
 #else
 static UBYTE under_atarixl_os[16384];
 static UBYTE under_cart809F[8192];
@@ -244,18 +260,7 @@ void MEMORY_InitialiseMachine(void)
 	/* MEMORY_attrib only exists in the flat-array path; PAGED_ATTRIB uses readmap/writemap instead */
 	ensure_memory_attrib_allocated();
 #endif
-	if (!under_atarixl_os) {
-		under_atarixl_os = (UBYTE*)ps_malloc(16384);
-		if (!under_atarixl_os) under_atarixl_os = (UBYTE*)malloc(16384);
-	}
-	if (!under_cart809F) {
-		under_cart809F = (UBYTE*)ps_malloc(8192);
-		if (!under_cart809F) under_cart809F = (UBYTE*)malloc(8192);
-	}
-	if (!under_cartA0BF) {
-		under_cartA0BF = (UBYTE*)ps_malloc(8192);
-		if (!under_cartA0BF) under_cartA0BF = (UBYTE*)malloc(8192);
-	}
+	ensure_under_buffers_allocated();  /* idempotent; no-op if main.cpp pre-allocated */
 #endif
 	ANTIC_xe_ptr = NULL;
 	cart809F_enabled = FALSE;

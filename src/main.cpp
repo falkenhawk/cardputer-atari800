@@ -17,6 +17,7 @@ extern "C" {
 }
 
 extern "C" void ensure_memory_mem_allocated(void);
+extern "C" void ensure_under_buffers_allocated(void);
 extern "C" UBYTE *MEMORY_mem;
 
 static renderer::Mode g_display_mode = renderer::Mode::Stretch;
@@ -118,6 +119,13 @@ void setup() {
     Serial.println("MEMORY_mem: ALLOC FAILED — core init will crash");
   }
   Serial.printf("heap@post-mem-alloc: free=%u\n", (unsigned)ESP.getFreeHeap());
+
+  // Pre-alloc the three XL/XE shadow buffers (under_atarixl_os 16 KB,
+  // under_cart809F 8 KB, under_cartA0BF 8 KB = 32 KB total). MEMORY_HandlePORTB
+  // memcpy's to them on every bank switch, so if they're NULL the very
+  // first frame crashes in memset/memcpy with EXCVADDR=0x1000.
+  ensure_under_buffers_allocated();
+  Serial.printf("heap@post-under-alloc: free=%u\n", (unsigned)ESP.getFreeHeap());
 
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);  // true = enableKeyboard (default)

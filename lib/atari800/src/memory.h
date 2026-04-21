@@ -38,6 +38,7 @@
 #ifdef CARDPUTER_ATARI800
 extern UBYTE *MEMORY_mem;
 extern void ensure_memory_mem_allocated(void);
+extern void ensure_under_buffers_allocated(void);
 #else
 extern UBYTE MEMORY_mem[65536 + 2];
 #endif
