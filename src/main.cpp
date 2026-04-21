@@ -43,17 +43,42 @@ static constexpr int SD_PIN_CS   = 12;
 static bool sd_mounted = false;
 
 static bool mount_sd() {
-  // Cardputer-Adv wires the SD card to hardware SPI2 on the ESP32-S3, which is
-  // separate from the LCD's bus. Re-initializing the `SPI` singleton here is
-  // safe because LGFX (the display driver) uses its own bus instance.
+  // Defensive reset sequence — required when we arrive via M5Launcher, which
+  // may have left the SPI pins in a half-initialized state. Symptom of the
+  // bad state: SD.begin() fails immediately with "no card?" even though the
+  // card is physically present and reads fine in Launcher itself.
+  //
+  // 1. Detach pins from the GPIO matrix (INPUT with no pull).
+  // 2. Explicitly deassert chip-select by driving it HIGH.
+  // 3. Call SPI.end() then SPI.begin() to fully re-init the peripheral.
+  // 4. Try SD.begin() at a conservative 4 MHz first; on success, we don't
+  //    need to bump up because we only read occasional small files.
+  pinMode(SD_PIN_SCK,  INPUT);
+  pinMode(SD_PIN_MISO, INPUT);
+  pinMode(SD_PIN_MOSI, INPUT);
+  pinMode(SD_PIN_CS,   OUTPUT);
+  digitalWrite(SD_PIN_CS, HIGH);
+  delay(20);
+
+  SPI.end();
   SPI.begin(SD_PIN_SCK, SD_PIN_MISO, SD_PIN_MOSI, SD_PIN_CS);
-  if (!SD.begin(SD_PIN_CS, SPI, 25000000)) {
-    Serial.println("SD: mount failed (no card? wrong format? wrong pins?)");
-    return false;
+
+  // Try a slow mount first — more forgiving if the card was left in a weird
+  // state. If it works, report and return. If it doesn't, retry at 25 MHz
+  // (which is what worked in T6 on a clean boot).
+  if (SD.begin(SD_PIN_CS, SPI, 4000000)) {
+    uint64_t size_mb = SD.cardSize() / (1024 * 1024);
+    Serial.printf("SD: mounted @ 4 MHz, %llu MB\n", size_mb);
+    return true;
   }
-  uint64_t size_mb = SD.cardSize() / (1024 * 1024);
-  Serial.printf("SD: mounted, %llu MB\n", size_mb);
-  return true;
+  Serial.println("SD: 4 MHz mount failed, retrying @ 25 MHz");
+  if (SD.begin(SD_PIN_CS, SPI, 25000000)) {
+    uint64_t size_mb = SD.cardSize() / (1024 * 1024);
+    Serial.printf("SD: mounted @ 25 MHz, %llu MB\n", size_mb);
+    return true;
+  }
+  Serial.println("SD: mount failed at both speeds (no card? wrong format? pins held?)");
+  return false;
 }
 
 static void list_sd_root() {
@@ -210,7 +235,7 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.2-m2-t14");
+  d.print("v0.2-m2-t14b");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");
