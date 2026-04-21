@@ -5,11 +5,12 @@
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <SPI.h>
-#include <esp_vfs.h>  // esp_vfs_unregister() — clears whichever FatFs slot
-                      // Launcher's SD_MMC session left registered. Without
-                      // this the Arduino SD.h mount fails with
-                      // esp_vfs_fat_register ESP_ERR_INVALID_STATE (0x101)
-                      // because the FatFs "0:" slot is still in use.
+#include <esp_vfs.h>  // esp_vfs_unregister() — clears the VFS path entry.
+#include <diskio_impl.h> // ff_diskio_register() — passing NULL impl releases
+                         // a FatFs drive slot that a prior firmware's SDMMC
+                         // driver left allocated. Without this release,
+                         // sdcard_init silently returns 0xFF (no free slot)
+                         // and SD.begin fails without any log output.
 #include <errno.h>
 
 #include "display/lcd.h"
@@ -55,13 +56,15 @@ static SPIClass sdCardSPI;
 static bool sd_mounted = false;
 
 static bool mount_sd() {
-  // Unregister any VFS mounts a prior firmware (M5Launcher) may have left
-  // behind. esp_vfs_unregister is a no-op if nothing was registered at the
-  // given base path, so this is safe to always call. Without this, SD.begin
-  // fails with ESP_ERR_INVALID_STATE (0x101) because the underlying FatFs
-  // library still sees the "0:" volume as in-use.
-  esp_vfs_unregister("/sdcard");   // Launcher's SD_MMC path
-  esp_vfs_unregister("/sd");       // our own (in case of re-mount attempts)
+  // Three-layer cleanup for Launcher-handoff state:
+  //   1. VFS path — clear both /sdcard (Launcher) and /sd (our own).
+  //   2. FatFs drive slot — ff_diskio_register(pdrv, NULL) releases the
+  //      slot so ff_diskio_get_drive() can hand it back to sdcard_init.
+  //   3. All subsequent init is standard Arduino SD pattern.
+  esp_vfs_unregister("/sdcard");
+  esp_vfs_unregister("/sd");
+  ff_diskio_register(0, NULL);
+  ff_diskio_register(1, NULL);
 
   sdCardSPI.begin(SD_PIN_SCK, SD_PIN_MISO, SD_PIN_MOSI, SD_PIN_CS);
   delay(10);
@@ -233,7 +236,7 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.2-m2-t14g");
+  d.print("v0.2-m2-t14h");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");
