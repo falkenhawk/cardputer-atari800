@@ -7,7 +7,10 @@
 #define PACKAGE_VERSION "5.2.0-cardputer"
 
 /* Emulated machines we enable */
-#define BASIC                 /* built-in BASIC cartridge support */
+/* BASIC: enabling this switches Atari800_Frame() to basic_frame(), which skips
+   ANTIC rendering entirely and leaves Screen_atari unpopulated. Removed for
+   M2 so ANTIC runs and the READY screen is visible on the LCD. */
+/* #define BASIC */
 
 /* use upstream's built-in Altirra ROM replacements.
    enables sysrom.c's EMUOS_ALTIRRA path, which auto-includes

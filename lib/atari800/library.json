@@ -8,7 +8,6 @@
     "includeDir": "src",
     "flags": [
       "-I$PROJECT_INCLUDE_DIR",
-      "-DBASIC",
       "-DSTEREO_SOUND=0",
       "-DCARDPUTER_ATARI800",
       "-Wno-implicit-function-declaration",

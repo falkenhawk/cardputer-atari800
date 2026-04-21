@@ -26,6 +26,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef CARDPUTER_ATARI800
+/* ps_malloc allocates from PSRAM on ESP32-S3 */
+extern void *ps_malloc(size_t size);
+#endif
 
 #include "atari.h"
 #include "antic.h"
@@ -81,9 +85,16 @@ UBYTE MEMORY_xegame[8192];
 int MEMORY_xe_bank = 0;
 int MEMORY_selftest_enabled = 0;
 
+#ifdef CARDPUTER_ATARI800
+/* cardputer-atari800: allocate from PSRAM at init time to keep DRAM free. */
+static UBYTE *under_atarixl_os = NULL;
+static UBYTE *under_cart809F   = NULL;
+static UBYTE *under_cartA0BF   = NULL;
+#else
 static UBYTE under_atarixl_os[16384];
 static UBYTE under_cart809F[8192];
 static UBYTE under_cartA0BF[8192];
+#endif
 
 static int cart809F_enabled = FALSE;
 int MEMORY_cartA0BF_enabled = FALSE;
@@ -200,6 +211,21 @@ void MEMORY_InitialiseMachine(void)
 	                    : Atari800_machine_type == Atari800_MACHINE_5200 ? 0x800
 	                    : 0x4000;
 	int const os_rom_start = 0x10000 - os_size;
+#ifdef CARDPUTER_ATARI800
+	/* allocate shadow-RAM buffers from PSRAM on first call */
+	if (!under_atarixl_os) {
+		under_atarixl_os = (UBYTE*)ps_malloc(16384);
+		if (!under_atarixl_os) under_atarixl_os = (UBYTE*)malloc(16384);
+	}
+	if (!under_cart809F) {
+		under_cart809F = (UBYTE*)ps_malloc(8192);
+		if (!under_cart809F) under_cart809F = (UBYTE*)malloc(8192);
+	}
+	if (!under_cartA0BF) {
+		under_cartA0BF = (UBYTE*)ps_malloc(8192);
+		if (!under_cartA0BF) under_cartA0BF = (UBYTE*)malloc(8192);
+	}
+#endif
 	ANTIC_xe_ptr = NULL;
 	cart809F_enabled = FALSE;
 	MEMORY_cartA0BF_enabled = FALSE;

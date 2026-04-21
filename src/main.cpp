@@ -1,14 +1,18 @@
 // cardputer-atari800 — entry point
-// Milestone 2: core init + single-frame smoke test
+// Milestone 2: core init + 50 Hz frame loop → LCD
 
 #include <Arduino.h>
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <SPI.h>
 
+#include "display/lcd.h"
+#include "display/renderer.h"
+
 extern "C" {
 #include "../lib/atari800/src/atari.h"
 #include "../lib/atari800/port.h"
+#include "../lib/atari800/src/screen.h"
 }
 
 // Cardputer-Adv SD card pins — verified on hardware.
@@ -96,48 +100,54 @@ void setup() {
   int init_ok = Atari800_Initialise(&argc, argv);
   Serial.printf("core: init_ok=%d\n", init_ok);
 
-  if (init_ok) {
-    Serial.println("core: running 1 frame as smoke test...");
-    Atari800_Frame();
-    Serial.println("core: frame 1 done, heap OK");
-
-    size_t free_heap = ESP.getFreeHeap();
-    size_t free_psram = ESP.getFreePsram();
-    Serial.printf("heap: free=%u bytes, psram=%u bytes\n",
-                  (unsigned)free_heap, (unsigned)free_psram);
+  if (!init_ok) {
+    auto& d2 = M5Cardputer.Display;
+    d2.setCursor(8, 100);
+    d2.setTextColor(TFT_RED, TFT_BLACK);
+    d2.print("core init failed");
+    return;
   }
+
+  // M2: set up display renderer for PAL + Stretch (default).
+  lcd::init();
+  renderer::set_mode(renderer::Mode::Stretch);
+  renderer::set_region_ntsc(false);
+
+  size_t free_heap = ESP.getFreeHeap();
+  Serial.printf("heap: free=%u bytes after core init\n", (unsigned)free_heap);
 }
 
 void loop() {
   M5Cardputer.update();
 
+  // Keep the T5 keyboard debug serial output — useful for M2 diagnostics
+  // and harmless. M3 routes these to the Atari core properly.
   if (M5Cardputer.Keyboard.isChange()) {
     auto status = M5Cardputer.Keyboard.keysState();
-
-    // print modifier state
     Serial.print("keys:");
     if (status.ctrl)  Serial.print(" CTRL");
     if (status.shift) Serial.print(" SHIFT");
     if (status.alt)   Serial.print(" ALT");
     if (status.fn)    Serial.print(" FN");
-    if (status.opt)   Serial.print(" OPT");  // dedicated Opt key (2nd from left on bottom row)
-
-    // print printable characters
-    for (auto c : status.word) {
-      Serial.printf(" '%c'(0x%02x)", c, c);
-    }
-    // print HID key codes (for non-printable keys like Enter, Esc, Backspace)
-    for (auto k : status.hid_keys) {
-      Serial.printf(" hid=0x%02x", k);
-    }
+    if (status.opt)   Serial.print(" OPT");
+    for (auto c : status.word)     Serial.printf(" '%c'(0x%02x)", c, c);
+    for (auto k : status.hid_keys) Serial.printf(" hid=0x%02x", k);
     Serial.println();
   }
 
-  static uint32_t last = 0;
+  // Frame loop — run atari800 at ~50 Hz (PAL) and present.
+  static uint32_t last_frame_ms = 0;
   uint32_t now = millis();
-  if (now - last >= 10000) {
-    last = now;
-    Serial.printf("uptime %lu ms\n", now);
+  if (now - last_frame_ms >= 20) {
+    last_frame_ms = now;
+    Atari800_Frame();
+    renderer::present(reinterpret_cast<const uint8_t*>(Screen_atari));
   }
-  delay(10);  // TODO(M3): remove; will conflict with audio frame pacing and Atari scheduler
+
+  // Heartbeat (every 10s) — proof the main loop is healthy.
+  static uint32_t last_hb = 0;
+  if (now - last_hb >= 10000) {
+    last_hb = now;
+    Serial.printf("uptime %lu ms heap=%u\n", now, (unsigned)ESP.getFreeHeap());
+  }
 }
