@@ -5,6 +5,7 @@
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <SPI.h>
+#include <errno.h>
 
 #include "display/lcd.h"
 #include "display/renderer.h"
@@ -55,27 +56,42 @@ static void list_sd_root() {
 }
 
 void setup() {
-  // CRITICAL: allocate Screen_atari (96 KB) BEFORE anything eats the heap.
-  // M5Cardputer.begin() takes ~200 KB for display/keyboard DMA buffers;
-  // if we wait until after, the malloc will fail (only ~65 KB left).
-  {
-    constexpr size_t buf_bytes = 384 * (240 + 16);
-    Screen_atari = (ULONG*) malloc(buf_bytes);
-    if (Screen_atari) {
-      memset(Screen_atari, 0, buf_bytes);
-    }
-    // Serial isn't up yet — status is printed below after Serial.begin.
-  }
-
   Serial.begin(115200);
   delay(500);
   Serial.println();
   Serial.println("cardputer-atari800 — boot");
-  if (Screen_atari) {
-    Serial.printf("Screen_atari: pre-allocated %u bytes\n", 384 * (240 + 16));
-  } else {
-    Serial.println("Screen_atari: ALLOC FAILED - core init will fail");
+
+  // ---- Heap diagnostics BEFORE any big allocations ----
+  size_t free0  = ESP.getFreeHeap();
+  size_t largest0 = ESP.getMaxAllocHeap();
+  Serial.printf("heap@entry: free=%u largest=%u psram=%u\n",
+                (unsigned)free0, (unsigned)largest0, (unsigned)ESP.getFreePsram());
+
+  // Try incremental alloc sizes to figure out where malloc fails
+  for (size_t sz : { (size_t)32768, (size_t)65536, (size_t)98304 }) {
+    void* p = malloc(sz);
+    if (p) {
+      Serial.printf("  malloc(%u) OK @ %p\n", (unsigned)sz, p);
+      free(p);
+    } else {
+      Serial.printf("  malloc(%u) FAILED (errno=%d)\n", (unsigned)sz, errno);
+    }
   }
+
+  // ---- The real Screen_atari allocation ----
+  constexpr size_t buf_bytes = 384 * (240 + 16);
+  Screen_atari = (ULONG*) malloc(buf_bytes);
+  if (Screen_atari) {
+    memset(Screen_atari, 0, buf_bytes);
+    Serial.printf("Screen_atari: pre-allocated %u bytes @ %p\n",
+                  (unsigned)buf_bytes, Screen_atari);
+  } else {
+    Serial.printf("Screen_atari: ALLOC FAILED for %u bytes (errno=%d)\n",
+                  (unsigned)buf_bytes, errno);
+  }
+
+  size_t free1 = ESP.getFreeHeap();
+  Serial.printf("heap@post-alloc: free=%u\n", (unsigned)free1);
 
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);  // true = enableKeyboard (default)
