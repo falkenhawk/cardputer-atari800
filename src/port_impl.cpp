@@ -117,10 +117,21 @@ int PLATFORM_PORT(int num) { (void)num; return 0xFF; }
 int PLATFORM_TRIG(int num) { (void)num; return 1; }
 
 /* screen.h — Screen_Initialise is called from Atari800_Initialise when BASIC
-   is not defined. Allocate the Screen_atari buffer from PSRAM so we don't
-   blow the 320 KB DRAM. Size: 384×(240+16) bytes. */
+   is not defined. On Cardputer-Adv there is no PSRAM, and by the time this
+   runs M5Cardputer.begin() has eaten ~200 KB of the 320 KB DRAM heap leaving
+   only ~65 KB — not enough for the 96 KB buffer. main.cpp therefore pre-
+   allocates Screen_atari at the very top of setup() before anything else
+   touches the heap. We just reuse that buffer here. */
 int Screen_Initialise(int *argc, char *argv[]) {
   (void)argc; (void)argv;
+  if (Screen_atari) {
+    // buffer was pre-allocated in main.cpp setup() before heap was eaten
+    // by M5Cardputer.begin(). Nothing to do.
+    return 1;
+  }
+  // fallback path: try to allocate here. Likely to fail on Cardputer-Adv
+  // because by now the heap is mostly gone. main.cpp should always
+  // pre-allocate, so reaching this is unexpected.
   constexpr size_t buf_bytes = 384 * (240 + 16);
   Screen_atari = (ULONG*) ps_malloc(buf_bytes);
   if (!Screen_atari) {
@@ -128,6 +139,9 @@ int Screen_Initialise(int *argc, char *argv[]) {
     Screen_atari = (ULONG*) malloc(buf_bytes);
   }
   if (Screen_atari) memset(Screen_atari, 0, buf_bytes);
+  if (!Screen_atari) {
+    Serial.println("Screen_Initialise: CRITICAL - heap too depleted for 96 KB alloc");
+  }
   return Screen_atari ? 1 : 0;
 }
 

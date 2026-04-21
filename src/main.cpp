@@ -55,10 +55,27 @@ static void list_sd_root() {
 }
 
 void setup() {
+  // CRITICAL: allocate Screen_atari (96 KB) BEFORE anything eats the heap.
+  // M5Cardputer.begin() takes ~200 KB for display/keyboard DMA buffers;
+  // if we wait until after, the malloc will fail (only ~65 KB left).
+  {
+    constexpr size_t buf_bytes = 384 * (240 + 16);
+    Screen_atari = (ULONG*) malloc(buf_bytes);
+    if (Screen_atari) {
+      memset(Screen_atari, 0, buf_bytes);
+    }
+    // Serial isn't up yet — status is printed below after Serial.begin.
+  }
+
   Serial.begin(115200);
   delay(500);
   Serial.println();
   Serial.println("cardputer-atari800 — boot");
+  if (Screen_atari) {
+    Serial.printf("Screen_atari: pre-allocated %u bytes\n", 384 * (240 + 16));
+  } else {
+    Serial.println("Screen_atari: ALLOC FAILED - core init will fail");
+  }
 
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);  // true = enableKeyboard (default)
