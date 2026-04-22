@@ -13,6 +13,10 @@
 #include "input/input_port.h"
 
 extern "C" {
+#include "input/mode.h"
+}
+
+extern "C" {
 #include "../lib/atari800/src/atari.h"
 #include "../lib/atari800/port.h"
 #include "../lib/atari800/src/screen.h"
@@ -56,6 +60,10 @@ static const char* mode_name(renderer::Mode m) {
   return "?";
 }
 
+/* Forward decl — try_load_xex is defined below (its SD/BINLOAD_Loader body
+   references SD/SPI globals that are set up later in this file). */
+static bool try_load_xex(const char* path);
+
 /* Fn-layer firmware action handler. Registered with input_port at setup();
    called from within input_port::poll() when a Fn+<key> chord resolves to a
    KM_OUT_ACTION. Audio (volume), menu overlay, save/load-state are wired in
@@ -94,10 +102,24 @@ static void on_input_action(km_action_t act) {
       port_raise_break_irq();   /* POKEY IRQ bit 7 — BASIC's STOP/BREAK handler reads this */
       break;
 
+    case KM_ACT_TOGGLE_INPUT_MODE:
+      mode_toggle();
+      Serial.printf("input: mode = %s\n",
+                    mode_current() == MODE_JOYSTICK ? "joystick" : "keyboard");
+      break;
+
+    case KM_ACT_LOAD_XEX:
+      /* Re-entry-safe: BINLOAD_Loader internally calls Atari800_Coldstart()
+         on success. try_load_xex logs failure. Same path as original M2 boot
+         hook; just triggered by user keystroke instead of happening at setup. */
+      Serial.println("action: load /atari800/test.xex");
+      try_load_xex("/atari800/test.xex");
+      break;
+
     case KM_ACT_VOLUME_DOWN: case KM_ACT_VOLUME_UP:       /* T10 wires audio */
     case KM_ACT_MENU_OPEN:                                /* T15 wires menu */
     case KM_ACT_SAVE_STATE: case KM_ACT_LOAD_STATE:       /* M5 stubs */
-    case KM_ACT_INVERSE_VIDEO: case KM_ACT_TOGGLE_INPUT_MODE:
+    case KM_ACT_INVERSE_VIDEO:
       Serial.printf("action: %d (not yet wired)\n", (int)act);
       break;
     default: break;
@@ -168,6 +190,11 @@ static bool try_load_xex(const char* path) {
   Serial.printf("xex: BINLOAD_Loader(\"%s\")\n", vfs_path);
   int ok = BINLOAD_Loader(vfs_path);
   Serial.printf("xex: BINLOAD_Loader returned %d\n", ok);
+  if (ok) {
+    mode_autodetect_for(path);   /* .xex -> MODE_JOYSTICK */
+    Serial.printf("input: mode = %s\n",
+                  mode_current() == MODE_JOYSTICK ? "joystick" : "keyboard");
+  }
   return ok;
 }
 
@@ -176,7 +203,7 @@ void setup() {
   delay(500);
   Serial.println();
   Serial.println("cardputer-atari800 — boot");
-  Serial.println("FW_VER=v0.3-m3-t3a");
+  Serial.println("FW_VER=v0.3-m3-t7");
 
   // ---- Heap diagnostics BEFORE any big allocations ----
   size_t free0  = ESP.getFreeHeap();
@@ -270,7 +297,7 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.3-m3-t3a");
+  d.print("v0.3-m3-t7");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");
@@ -325,11 +352,9 @@ void setup() {
 
   dump_shadow_ptrs("post-core-init");
 
-  // Try to boot a hardcoded test .xex. If absent, AltirraOS's default
-  // prompt stays visible (the non-booted state we saw in T12).
-  try_load_xex("/atari800/test.xex");
-
-  dump_shadow_ptrs("post-xex-load");
+  // M3: boot into AltirraBASIC READY by default. User triggers xex load via
+  // Fn+L (KM_ACT_LOAD_XEX), which calls try_load_xex("/atari800/test.xex").
+  // Avoids the "must rename test.xex" friction from early M3 testing.
 }
 
 void loop() {
