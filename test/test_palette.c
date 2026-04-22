@@ -59,13 +59,24 @@ int main(void) {
   }
 
   /* Hue 9 at luma 4 (index 0x94) — should be blue-dominant in both
-   * systems. Confirmed by computing upstream YIQ/YUV math: NTSC hue 9
-   * at angle ~157°, PAL hue 9 at an equivalent angle via del_coeffs +
-   * subcarrier reconstruction. In both, B > R and B > G. */
+   * systems. NTSC: YIQ with 303° starting angle, hue 9 lands at ~157°.
+   * PAL: simplified YIQ with 330° starting angle, hue 9 lands at ~162°.
+   * In both, B > R and B > G. */
   CHECK(b5(pal[0x94])  > r5(pal[0x94]),  "PAL  hue 9 luma 4 should be bluer than red");
   CHECK(b5(pal[0x94])  > 4,              "PAL  hue 9 luma 4 should have non-trivial blue");
   CHECK(b5(ntsc[0x94]) > r5(ntsc[0x94]), "NTSC hue 9 luma 4 should be bluer than red");
   CHECK(b5(ntsc[0x94]) > 4,              "NTSC hue 9 luma 4 should have non-trivial blue");
+
+  /* PAL hue 9 luma 4 should be clearly blue-dominant after the simplified
+   * YIQ port (B > G and B >> R). Compare G6 on a 5-bit scale (G6 >> 1). */
+  {
+    uint16_t p94 = pal[0x94];
+    int r = r5(p94);
+    int g = g6(p94) >> 1;
+    int b = b5(p94);
+    CHECK(b > g && b > r, "PAL hue 9 luma 4: blue channel dominant over both green and red");
+    CHECK(b >= 2 * r,     "PAL hue 9 luma 4: blue at least 2x red");
+  }
 
   /* Hue 1 (index 0x14 at luma 4) — traditionally "gold" (colorburst
    * hue in upstream NTSC); at least should NOT be blue-dominant. */
