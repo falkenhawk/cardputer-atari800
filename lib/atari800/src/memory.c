@@ -113,7 +113,9 @@ int MEMORY_xe_bank = 0;
 int MEMORY_selftest_enabled = 0;
 
 #ifdef CARDPUTER_ATARI800
-/* cardputer-atari800: allocate from PSRAM at init time to keep DRAM free. */
+/* cardputer-atari800: allocate from heap at init time to keep .bss small —
+   main.cpp's setup() sequence guarantees these run while the DRAM heap has
+   enough contiguous space (see setup() for ordering rationale). */
 static UBYTE *under_atarixl_os = NULL;
 static UBYTE *under_cart809F   = NULL;
 static UBYTE *under_cartA0BF   = NULL;
@@ -132,6 +134,12 @@ void ensure_under_buffers_allocated(void) {
 		if (!under_cartA0BF) under_cartA0BF = (UBYTE*)malloc(8192);
 	}
 }
+
+/* Diagnostic getters so main.cpp can inspect the shadow-buffer pointers
+   when chasing the MEMORY_HandlePORTB NULL-deref. Remove once resolved. */
+void *debug_get_under_atarixl_os(void) { return under_atarixl_os; }
+void *debug_get_under_cart809F(void)   { return under_cart809F; }
+void *debug_get_under_cartA0BF(void)   { return under_cartA0BF; }
 #else
 static UBYTE under_atarixl_os[16384];
 static UBYTE under_cart809F[8192];

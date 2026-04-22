@@ -6,6 +6,7 @@
 #include <SD.h>
 #include <SPI.h>
 #include <errno.h>
+#include <esp_heap_caps.h>
 
 #include "display/lcd.h"
 #include "display/renderer.h"
@@ -17,10 +18,23 @@ extern "C" {
 #include "../lib/atari800/src/memory.h"
 }
 
-#include "storage/loader.h"
 
 extern "C" void ensure_memory_mem_allocated(void);
 extern "C" void ensure_under_buffers_allocated(void);
+extern "C" void* debug_get_under_atarixl_os(void);
+extern "C" void* debug_get_under_cart809F(void);
+extern "C" void* debug_get_under_cartA0BF(void);
+extern "C" int BINLOAD_Loader(const char* filename);
+
+static void dump_shadow_ptrs(const char* tag) {
+  Serial.printf("ptrs@%s: MEMORY_mem=%p under_xlos=%p under_809F=%p under_A0BF=%p\n",
+                tag,
+                (void*)MEMORY_mem,
+                debug_get_under_atarixl_os(),
+                debug_get_under_cart809F(),
+                debug_get_under_cartA0BF());
+  Serial.flush();
+}
 
 static renderer::Mode g_display_mode = renderer::Mode::Stretch;
 
@@ -76,71 +90,29 @@ static void list_sd_root() {
   root.close();
 }
 
-// M2 hardcoded .xex loader — reads a .xex from SD, pokes its segments into
-// MEMORY_mem[], writes RUNAD/INITAD vectors, and Coldstarts the Atari.
-// M4 will replace this with a proper file browser.
+// M2 .xex loader — delegates to atari800 core's BINLOAD_Loader, which uses
+// stdio fopen() (routed through ESP-IDF VFS to the SD mount at /sd) and
+// intercepts the SIO boot-sector read to inject a fake boot sector that
+// drives proper xex segment loading + RUNAD/INITAD handling. This is what
+// the desktop atari800 does when you pass a .xex on the command line.
+//
+// The earlier manual approach (poke into MEMORY_mem then Atari800_Coldstart)
+// didn't work because Coldstart resets RAM *after* our pokes.
 static bool try_load_xex(const char* path) {
   if (!sd_mounted) {
     Serial.printf("xex: SD not mounted, skipping %s\n", path);
     return false;
   }
-  File f = SD.open(path, FILE_READ);
-  if (!f) {
-    Serial.printf("xex: %s not found\n", path);
-    return false;
-  }
-  size_t flen = f.size();
-  if (flen == 0 || flen > 64 * 1024) {
-    Serial.printf("xex: bad size %u (max 64 KB)\n", (unsigned)flen);
-    f.close();
-    return false;
-  }
 
-  uint8_t* xex_buf = (uint8_t*) malloc(flen);
-  if (!xex_buf) {
-    Serial.printf("xex: malloc(%u) failed — heap too tight\n", (unsigned)flen);
-    f.close();
-    return false;
-  }
-  size_t nread = f.read(xex_buf, flen);
-  f.close();
-  if (nread != flen) {
-    Serial.printf("xex: short read %u/%u\n", (unsigned)nread, (unsigned)flen);
-    free(xex_buf);
-    return false;
-  }
+  // Translate SD-relative path to a VFS absolute path under /sd.
+  char vfs_path[128];
+  if (path[0] == '/') snprintf(vfs_path, sizeof vfs_path, "/sd%s", path);
+  else                snprintf(vfs_path, sizeof vfs_path, "/sd/%s", path);
 
-  xex_parsed_t p;
-  if (!xex_parse(xex_buf, flen, &p)) {
-    Serial.println("xex: parse failed");
-    free(xex_buf);
-    return false;
-  }
-
-  // Poke segments into Atari RAM.
-  for (int i = 0; i < p.n_segs; i++) {
-    const xex_segment_t& s = p.segs[i];
-    for (size_t b = 0; b < s.data_len; b++) {
-      MEMORY_mem[s.start_addr + b] = s.data[b];
-    }
-  }
-
-  // Set the run / init vectors in page 2.
-  if (p.run_addr) {
-    MEMORY_mem[0x02E0] = p.run_addr & 0xFF;
-    MEMORY_mem[0x02E1] = (p.run_addr >> 8) & 0xFF;
-  }
-  if (p.init_addr) {
-    MEMORY_mem[0x02E2] = p.init_addr & 0xFF;
-    MEMORY_mem[0x02E3] = (p.init_addr >> 8) & 0xFF;
-  }
-
-  Serial.printf("xex: loaded %d segments from %s, RUN=0x%04X, INIT=0x%04X\n",
-                p.n_segs, path, p.run_addr, p.init_addr);
-
-  free(xex_buf);
-  Atari800_Coldstart();
-  return true;
+  Serial.printf("xex: BINLOAD_Loader(\"%s\")\n", vfs_path);
+  int ok = BINLOAD_Loader(vfs_path);
+  Serial.printf("xex: BINLOAD_Loader returned %d\n", ok);
+  return ok;
 }
 
 void setup() {
@@ -148,6 +120,7 @@ void setup() {
   delay(500);
   Serial.println();
   Serial.println("cardputer-atari800 — boot");
+  Serial.println("FW_VER=v0.2-m2-t14q");
 
   // ---- Heap diagnostics BEFORE any big allocations ----
   size_t free0  = ESP.getFreeHeap();
@@ -155,19 +128,33 @@ void setup() {
   Serial.printf("heap@entry: free=%u largest=%u psram=%u\n",
                 (unsigned)free0, (unsigned)largest0, (unsigned)ESP.getFreePsram());
 
-  // ---- Mount SD card FIRST, while the heap is fresh ----
-  // esp_vfs_fat_register internally mallocs a few KB for FATFS state. If we
-  // mount AFTER the big Screen_atari / MEMORY_mem / under_* allocations, the
-  // heap is fragmented and that malloc fails with ESP_ERR_NO_MEM (error
-  // code 0x101 — not 0x103 "invalid state" as I spent hours chasing).
-  // Mounting now, at ~237 KB free with 196 KB largest block, gives FATFS
-  // plenty of contiguous space.
-  sd_mounted = mount_sd();
-  Serial.printf("heap@post-sd: free=%u largest=%u\n",
-                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+  // Per-region details (so we can see if the "fragmented 38 KB" outside the
+  // big block contains any single chunk >= 16 KB — critical for under_atarixl_os).
+  multi_heap_info_t hi;
+  heap_caps_get_info(&hi, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  Serial.printf("heap INTERNAL|8BIT: free=%u largest=%u min_free=%u blocks(free=%u,alloc=%u)\n",
+                (unsigned)hi.total_free_bytes,
+                (unsigned)hi.largest_free_block,
+                (unsigned)hi.minimum_free_bytes,
+                (unsigned)hi.free_blocks,
+                (unsigned)hi.allocated_blocks);
+  heap_caps_get_info(&hi, MALLOC_CAP_INTERNAL);
+  Serial.printf("heap INTERNAL     : free=%u largest=%u\n",
+                (unsigned)hi.total_free_bytes,
+                (unsigned)hi.largest_free_block);
+
+  // ---- Big contiguous allocations FIRST, while heap@entry has a 196 KB
+  //      contiguous block. Packing is tight: we need 92 + 65 + 16 = 173 KB
+  //      contiguous (Screen + MEMORY_mem + under_xlos), which fits in 196 KB
+  //      with ~23 KB to spare. Previous ordering (SD first) dropped largest
+  //      to 172 KB and failed this packing by ~1 KB. SD mount is last now —
+  //      its FATFS state (~27 KB across several small allocs) goes into the
+  //      fragments left behind.
 
   // ---- The real Screen_atari allocation ----
-  constexpr size_t buf_bytes = 384 * (240 + 16);
+  // atari800 core only needs Screen_WIDTH * Screen_HEIGHT = 384*240 = 92160
+  // bytes (per screen.h comments).
+  constexpr size_t buf_bytes = 384 * 240;
   Screen_atari = (ULONG*) malloc(buf_bytes);
   if (Screen_atari) {
     memset(Screen_atari, 0, buf_bytes);
@@ -177,27 +164,38 @@ void setup() {
     Serial.printf("Screen_atari: ALLOC FAILED for %u bytes (errno=%d)\n",
                   (unsigned)buf_bytes, errno);
   }
+  Serial.printf("heap@post-screen: free=%u largest=%u\n",
+                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 
-  size_t free1 = ESP.getFreeHeap();
-  Serial.printf("heap@post-alloc: free=%u\n", (unsigned)free1);
-
-  // ---- Pre-allocate MEMORY_mem (65538 bytes). Frees another 64 KB of static
-  //      DRAM so Screen_atari + MEMORY_mem both fit in the available heap
-  //      without fragmenting into sub-65 KB chunks.
+  // ---- MEMORY_mem (65538 bytes) — 6502 address space.
   ensure_memory_mem_allocated();
   if (MEMORY_mem) {
     Serial.printf("MEMORY_mem: pre-allocated @ %p\n", (void*)MEMORY_mem);
   } else {
     Serial.println("MEMORY_mem: ALLOC FAILED — core init will crash");
   }
-  Serial.printf("heap@post-mem-alloc: free=%u\n", (unsigned)ESP.getFreeHeap());
+  Serial.printf("heap@post-mem-alloc: free=%u largest=%u\n",
+                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 
-  // Pre-alloc the three XL/XE shadow buffers (under_atarixl_os 16 KB,
-  // under_cart809F 8 KB, under_cartA0BF 8 KB = 32 KB total). MEMORY_HandlePORTB
-  // memcpy's to them on every bank switch, so if they're NULL the very
-  // first frame crashes in memset/memcpy with EXCVADDR=0x1000.
+  // ---- XL/XE shadow buffers (under_atarixl_os 16 KB + under_cart809F 8 KB +
+  //      under_cartA0BF 8 KB = 32 KB). 16 KB goes into the big block's
+  //      leftover (~23 KB after Screen+MEMORY_mem); the two 8 KB ones find
+  //      small-block slots.
   ensure_under_buffers_allocated();
-  Serial.printf("heap@post-under-alloc: free=%u\n", (unsigned)ESP.getFreeHeap());
+  Serial.printf("heap@post-under-alloc: free=%u largest=%u xlos=%p 809F=%p A0BF=%p\n",
+                (unsigned)ESP.getFreeHeap(),
+                (unsigned)ESP.getMaxAllocHeap(),
+                debug_get_under_atarixl_os(),
+                debug_get_under_cart809F(),
+                debug_get_under_cartA0BF());
+
+  // ---- Mount SD LAST, after the big contiguous allocs. FATFS' internal
+  //      allocations are small (~4-8 KB chunks) and fit in fragments.
+  sd_mounted = mount_sd();
+  Serial.printf("heap@post-sd: free=%u largest=%u sd=%d\n",
+                (unsigned)ESP.getFreeHeap(),
+                (unsigned)ESP.getMaxAllocHeap(),
+                sd_mounted ? 1 : 0);
 
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);  // true = enableKeyboard (default)
@@ -211,7 +209,7 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.2-m2-t14l");
+  d.print("v0.2-m2-t14q");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");
@@ -259,9 +257,13 @@ void setup() {
   size_t free_heap = ESP.getFreeHeap();
   Serial.printf("heap: free=%u bytes after core init\n", (unsigned)free_heap);
 
+  dump_shadow_ptrs("post-core-init");
+
   // Try to boot a hardcoded test .xex. If absent, AltirraOS's default
   // prompt stays visible (the non-booted state we saw in T12).
   try_load_xex("/atari800/test.xex");
+
+  dump_shadow_ptrs("post-xex-load");
 }
 
 void loop() {
@@ -295,10 +297,19 @@ void loop() {
 
   // Frame loop — run atari800 at ~50 Hz (PAL) and present.
   static uint32_t last_frame_ms = 0;
+  static int frame_count = 0;
   uint32_t now = millis();
   if (now - last_frame_ms >= 20) {
     last_frame_ms = now;
+    if (frame_count < 3) {
+      Serial.printf("frame %d begin\n", frame_count);
+      dump_shadow_ptrs("pre-frame");
+    }
     Atari800_Frame();
+    if (frame_count < 3) {
+      Serial.printf("frame %d done\n", frame_count);
+    }
+    frame_count++;
     renderer::present(reinterpret_cast<const uint8_t*>(Screen_atari));
   }
 
