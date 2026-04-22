@@ -40,3 +40,6 @@ add_test(NAME mode COMMAND test_mode)
 
 add_executable(test_pokey_glue test_pokey_glue.c ../src/audio/pokey_glue.c)
 add_test(NAME pokey_glue COMMAND test_pokey_glue)
+
+add_executable(test_settings test_settings.c ../src/settings/settings.c)
+add_test(NAME settings COMMAND test_settings)
