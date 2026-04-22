@@ -187,6 +187,13 @@ NTSC/PAL runtime toggle. Machine-model picker (800XL / 65XE / 130XE / XEGS). Pro
   largest contiguous is 17 KB — totally different bug profile. Use
   `heap_caps_get_info()` or at minimum `ESP.getMaxAllocHeap()` when chasing
   alloc failures.
+- **Don't blame M5Launcher.** Spent hours hypothesizing that Launcher's OTA
+  boot-handoff was leaving peripherals / VFS / FatFs slot in a weird state
+  that broke SD mount. Proved that wrong by flashing as primary firmware
+  (overwriting Launcher) — same failure reproduced. The real cause was
+  internal heap fragmentation from our own pre-allocations. When Launcher is
+  the "different thing" in a reproducing failure, verify its involvement with
+  a primary-firmware flash FIRST before building fixes around it.
 
 ## Starting M3
 
