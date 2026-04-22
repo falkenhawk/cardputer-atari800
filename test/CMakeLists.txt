@@ -28,3 +28,6 @@ add_test(NAME projector COMMAND test_projector)
 add_executable(test_loader test_loader.c ../src/storage/loader.cpp)
 set_target_properties(test_loader PROPERTIES LINKER_LANGUAGE CXX)
 add_test(NAME loader COMMAND test_loader)
+
+add_executable(test_keymap test_keymap.c ../src/input/keymap.c)
+add_test(NAME keymap COMMAND test_keymap)
