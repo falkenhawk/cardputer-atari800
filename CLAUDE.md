@@ -173,6 +173,11 @@ NTSC/PAL runtime toggle. Machine-model picker (800XL / 65XE / 130XE / XEGS). Pro
   must match before ejecting.
 - `diskutil unmount force` does NOT flush macOS write-back cache to SD. Use
   `sync && sleep 2 && diskutil unmount force` or (better) `diskutil eject`.
+- When copying to SD, use `COPYFILE_DISABLE=1 cp ...` to suppress `._*`
+  AppleDouble sidecars, and run the `memory/sd-hygiene.md` on-mount +
+  on-unmount procedure to keep the card free of `.DS_Store` /
+  `.Spotlight-V100` / `._*` cruft. `rm -rf` outside cwd is blocked by
+  Safety Net — request explicit user OK for cleanup commands.
 
 ## Gotchas observed this session (don't repeat)
 
