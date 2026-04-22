@@ -31,3 +31,6 @@ add_test(NAME loader COMMAND test_loader)
 
 add_executable(test_keymap test_keymap.c ../src/input/keymap.c)
 add_test(NAME keymap COMMAND test_keymap)
+
+add_executable(test_joystick test_joystick.c ../src/input/joystick.c)
+add_test(NAME joystick COMMAND test_joystick)
