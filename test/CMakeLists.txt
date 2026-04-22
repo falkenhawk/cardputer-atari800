@@ -37,3 +37,6 @@ add_test(NAME joystick COMMAND test_joystick)
 
 add_executable(test_mode test_mode.c ../src/input/mode.c)
 add_test(NAME mode COMMAND test_mode)
+
+add_executable(test_pokey_glue test_pokey_glue.c ../src/audio/pokey_glue.c)
+add_test(NAME pokey_glue COMMAND test_pokey_glue)
