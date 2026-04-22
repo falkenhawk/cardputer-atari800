@@ -16,6 +16,7 @@ constexpr int LCD_W           = 240;
 }
 
 void set_mode(Mode m) { current_mode = m; }
+Mode get_mode() { return current_mode; }
 void set_region_ntsc(bool ntsc) { use_ntsc = ntsc; }
 
 void present(const uint8_t* screen_atari) {

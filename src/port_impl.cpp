@@ -16,8 +16,12 @@
 
 extern "C" {
 /* screen.h declares ULONG and Screen_atari with C linkage — include inside
-   extern "C" so function prototypes match our definitions below. */
+   extern "C" so function prototypes match our definitions below.
+   pokey.h + cpu.h give us POKEY_KBCODE / POKEY_IRQEN / POKEY_IRQST /
+   POKEY_SKSTAT / CPU_GenerateIRQ() used by our INPUT_Frame() pump below. */
 #include "../../atari800/src/screen.h"
+#include "../../atari800/src/pokey.h"
+#include "../../atari800/src/cpu.h"
 } // close extern "C" temporarily — reopen below for the rest of the port
 
 /* Screen_atari — 384 × (240+16) byte pixel buffer, ULONG-aligned.
@@ -196,8 +200,45 @@ int  INPUT_cx85                              = 0;
 
 int  INPUT_Initialise(int *argc, char *argv[])  { (void)argc; (void)argv; return 1; }
 void INPUT_Exit(void)                           {}
-void INPUT_Frame(void)                          {}
+
+/* INPUT_Frame — once-per-Atari-frame keyboard pump.
+   Copies INPUT_key_code (set by input_port::poll() before Atari800_Frame)
+   into POKEY_KBCODE and raises the POKEY kbd IRQ on key-press transitions.
+   This is the minimal slice of upstream input.c we need; upstream does it
+   per-scanline but per-frame is sufficient for typing latency (20 ms ok).
+
+   Edge-triggered: IRQ fires only when INPUT_key_code CHANGES, so holding a
+   key doesn't hammer BASIC's key-repeat logic at 50 Hz. */
+void INPUT_Frame(void) {
+  static int last_code = -1;
+  if (INPUT_key_code >= 0) {
+    if (INPUT_key_code != last_code) {
+      POKEY_KBCODE = (UBYTE)(INPUT_key_code & 0xFF);
+      POKEY_SKSTAT &= ~0x04;           /* bit 2 active-low: "last key still down" */
+      if (POKEY_IRQEN & 0x40) {
+        POKEY_IRQST &= ~0x40;          /* assert kbd IRQ (bit 6 active-low) */
+        CPU_GenerateIRQ();
+      }
+    }
+  } else {
+    POKEY_SKSTAT |= 0x04;              /* no key down — clear the "key pressed" flag */
+  }
+  last_code = INPUT_key_code;
+}
+
 void INPUT_Scanline(void)                       {}
+
+/* Raise the POKEY BREAK IRQ — same shape as the kbd IRQ in INPUT_Frame but
+   bit 7 of IRQST/IRQEN. Called from main.cpp's on_input_action() when the
+   user presses Fn+7. Vendored core has NO consumer of AKEY_BREAK (grep
+   confirms — upstream input.c would handle it but it's not vendored), so
+   we raise the IRQ directly the same way a real Atari BREAK key does. */
+void port_raise_break_irq(void) {
+  if (POKEY_IRQEN & 0x80) {
+    POKEY_IRQST &= ~0x80;
+    CPU_GenerateIRQ();
+  }
+}
 void INPUT_SelectMultiJoy(int no)               { (void)no; }
 void INPUT_CenterMousePointer(void)             {}
 void INPUT_DrawMousePointer(void)               {}

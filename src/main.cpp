@@ -10,6 +10,7 @@
 
 #include "display/lcd.h"
 #include "display/renderer.h"
+#include "input/input_port.h"
 
 extern "C" {
 #include "../lib/atari800/src/atari.h"
@@ -26,6 +27,15 @@ extern "C" void* debug_get_under_cart809F(void);
 extern "C" void* debug_get_under_cartA0BF(void);
 extern "C" int BINLOAD_Loader(const char* filename);
 
+/* atari800 core reset entry points (for Fn+4 / Fn+5 via action handler).
+   Declared here rather than via atari.h to keep main.cpp's include set
+   tight — atari.h pulls in a wide transitive graph. */
+extern "C" {
+void Atari800_Warmstart(void);
+void Atari800_Coldstart(void);
+void port_raise_break_irq(void);   /* defined in port_impl.cpp */
+}
+
 static void dump_shadow_ptrs(const char* tag) {
   Serial.printf("ptrs@%s: MEMORY_mem=%p under_xlos=%p under_809F=%p under_A0BF=%p\n",
                 tag,
@@ -36,8 +46,6 @@ static void dump_shadow_ptrs(const char* tag) {
   Serial.flush();
 }
 
-static renderer::Mode g_display_mode = renderer::Mode::Stretch;
-
 static const char* mode_name(renderer::Mode m) {
   switch (m) {
     case renderer::Mode::PixelPerfect: return "Pixel-perfect";
@@ -46,6 +54,54 @@ static const char* mode_name(renderer::Mode m) {
     case renderer::Mode::Stretch:      return "Stretch";
   }
   return "?";
+}
+
+/* Fn-layer firmware action handler. Registered with input_port at setup();
+   called from within input_port::poll() when a Fn+<key> chord resolves to a
+   KM_OUT_ACTION. Audio (volume), menu overlay, save/load-state are wired in
+   later tasks (T10/T15/M5); brightness + display mode + reset/break are live. */
+static void on_input_action(km_action_t act) {
+  switch (act) {
+    case KM_ACT_DISPLAY_MODE_CYCLE: {
+      renderer::Mode next = static_cast<renderer::Mode>(
+        (static_cast<int>(renderer::get_mode()) + 1) % 4);
+      renderer::set_mode(next);
+      Serial.printf("display: %s\n", mode_name(next));
+      break;
+    }
+    case KM_ACT_BRIGHTNESS_DOWN: {
+      uint8_t b = M5Cardputer.Display.getBrightness();
+      if (b > 16) M5Cardputer.Display.setBrightness(b - 16);
+      Serial.printf("brightness: %u\n", M5Cardputer.Display.getBrightness());
+      break;
+    }
+    case KM_ACT_BRIGHTNESS_UP: {
+      uint8_t b = M5Cardputer.Display.getBrightness();
+      if (b <= 255 - 16) M5Cardputer.Display.setBrightness(b + 16);
+      Serial.printf("brightness: %u\n", M5Cardputer.Display.getBrightness());
+      break;
+    }
+    case KM_ACT_WARM_RESET:
+      Serial.println("action: warm reset");
+      Atari800_Warmstart();
+      break;
+    case KM_ACT_COLD_RESET:
+      Serial.println("action: cold reset");
+      Atari800_Coldstart();
+      break;
+    case KM_ACT_BREAK:
+      Serial.println("action: break");
+      port_raise_break_irq();   /* POKEY IRQ bit 7 — BASIC's STOP/BREAK handler reads this */
+      break;
+
+    case KM_ACT_VOLUME_DOWN: case KM_ACT_VOLUME_UP:       /* T10 wires audio */
+    case KM_ACT_MENU_OPEN:                                /* T15 wires menu */
+    case KM_ACT_SAVE_STATE: case KM_ACT_LOAD_STATE:       /* M5 stubs */
+    case KM_ACT_INVERSE_VIDEO: case KM_ACT_TOGGLE_INPUT_MODE:
+      Serial.printf("action: %d (not yet wired)\n", (int)act);
+      break;
+    default: break;
+  }
 }
 
 // Cardputer-Adv SD pins per M5Stack's own M5Cardputer/examples/Basic/sdcard.ino
@@ -120,7 +176,7 @@ void setup() {
   delay(500);
   Serial.println();
   Serial.println("cardputer-atari800 — boot");
-  Serial.println("FW_VER=v0.2-m2-t14q");
+  Serial.println("FW_VER=v0.3-m3-t3a");
 
   // ---- Heap diagnostics BEFORE any big allocations ----
   size_t free0  = ESP.getFreeHeap();
@@ -200,6 +256,11 @@ void setup() {
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);  // true = enableKeyboard (default)
 
+  // Wire the Fn-layer action handler now that M5Cardputer.Display (used by
+  // brightness actions) is alive. input_port::poll() will fire this back
+  // synchronously from the main loop whenever Fn+<action-key> is pressed.
+  input_port::set_action_handler(on_input_action);
+
   // splash screen
   auto& d = M5Cardputer.Display;
   d.setRotation(1);                        // landscape, text-friendly
@@ -209,7 +270,7 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.2-m2-t14q");
+  d.print("v0.3-m3-t3a");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");
@@ -234,10 +295,15 @@ void setup() {
     d.print("SD: not mounted");
   }
 
-  // M2: init the atari800 core
+  // M2: init the atari800 core.
+  // "-basic" clears Atari800_disable_basic (core default is TRUE, which
+  // simulates OPTION-held at boot in gtia.c:571 and leaves the OS stuck
+  // in SIO-wait mode showing a diskette animation — no BASIC READY).
+  // M2 never hit this because T14 jumped straight to xex loading; T2's
+  // HUMAN CHECKPOINT needs BASIC to boot so typing has something to echo to.
   Serial.println("core: initialising atari800...");
-  int argc = 1;
-  char* argv[] = {(char*)"atari800"};
+  int argc = 2;
+  char* argv[] = {(char*)"atari800", (char*)"-basic"};
   int init_ok = Atari800_Initialise(&argc, argv);
   Serial.printf("core: init_ok=%d\n", init_ok);
 
@@ -281,18 +347,9 @@ void loop() {
     if (status.opt)   Serial.print(" OPT");
     for (auto c : status.word)     Serial.printf(" '%c'(0x%02x)", c, c);
     for (auto k : status.hid_keys) Serial.printf(" hid=0x%02x", k);
-    // Fn+\ cycles display mode (M2 shortcut; full Fn layer comes in M3).
-    if (status.fn) {
-      for (auto c : status.word) {
-        if (c == '\\') {
-          g_display_mode = static_cast<renderer::Mode>(
-            (static_cast<int>(g_display_mode) + 1) % 4);
-          renderer::set_mode(g_display_mode);
-          Serial.printf("display: %s\n", mode_name(g_display_mode));
-        }
-      }
-    }
     Serial.println();
+    // Fn+<action-key> dispatch now flows through input_port::poll() →
+    // on_input_action(); the inline handler that used to live here is gone.
   }
 
   // Frame loop — run atari800 at ~50 Hz (PAL) and present.
@@ -301,6 +358,7 @@ void loop() {
   uint32_t now = millis();
   if (now - last_frame_ms >= 20) {
     last_frame_ms = now;
+    input_port::poll();          // snapshot keyboard before stepping the core
     if (frame_count < 3) {
       Serial.printf("frame %d begin\n", frame_count);
       dump_shadow_ptrs("pre-frame");

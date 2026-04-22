@@ -33,6 +33,30 @@
 #define AKEY_BRACKETLEFT 0x60
 #define AKEY_BRACKETRIGHT 0x62
 #define AKEY_BACKSLASH   0x46
+#define AKEY_QUOTE       0x73   /* single-quote ' */
+
+/* Shifted-punctuation AKEYs (precomputed glyph codes, not SHFT|base).
+   These are the values akey.h defines directly — some are NOT the naive
+   AKEY_SHFT | AKEY_<base> because Atari's shifted glyphs don't line up
+   with a US PC keyboard. Example: Shift+2 on a PC → '@' but on Atari
+   Shift+2 → '"'; Atari's '@' is Shift+8 (AKEY_AT = 0x75). */
+#define AKEY_EXCLAMATION 0x5f
+#define AKEY_DBLQUOTE    0x5e
+#define AKEY_HASH        0x5a
+#define AKEY_DOLLAR      0x58
+#define AKEY_PERCENT     0x5d
+#define AKEY_CIRCUMFLEX  0x47   /* ^ */
+#define AKEY_AMPERSAND   0x5b   /* & */
+#define AKEY_AT          0x75   /* @ */
+#define AKEY_PARENLEFT   0x70
+#define AKEY_PARENRIGHT  0x72
+#define AKEY_LESS        0x36   /* < */
+#define AKEY_GREATER     0x37   /* > */
+#define AKEY_QUESTION    0x66
+#define AKEY_PLUS        0x06
+#define AKEY_ASTERISK    0x07
+#define AKEY_UNDERSCORE  0x4e
+#define AKEY_BAR         0x4f   /* | */
 
 #define AKEY_RETURN      0x0c
 #define AKEY_SPACE       0x21
@@ -49,9 +73,15 @@ static const int letter_akey[26] = {
   /* y-z */ 0x2b, 0x17
 };
 
+/* Hardening assert: if akey.h ever renumbers or someone edits the table
+   above, this catches it at compile time. */
+_Static_assert(sizeof(letter_akey)/sizeof(letter_akey[0]) == 26,
+               "letter_akey must have 26 entries");
+
 /* Punctuation → AKEY_* (unshifted only — Shift is applied via OR). */
 static int punct_to_akey(int c) {
   switch (c) {
+    case ' ':  return AKEY_SPACE;    /* Cardputer puts Space in word[0] as 0x20 */
     case ';':  return AKEY_SEMICOLON;
     case ',':  return AKEY_COMMA;
     case '.':  return AKEY_FULLSTOP;
@@ -61,12 +91,49 @@ static int punct_to_akey(int c) {
     case '=':  return AKEY_EQUAL;
     case '[':  return AKEY_BRACKETLEFT;
     case ']':  return AKEY_BRACKETRIGHT;
+    case '\'': return AKEY_QUOTE;
+    default:   return AKEY_NONE;
+  }
+}
+
+/* M5Cardputer's keysState().word[] reports the SHIFTED glyph (not the base
+   key) when Shift is held — e.g. Shift+= yields word[0] = '+'. Our keymap
+   needs to translate that back into the Atari AKEY for that glyph directly.
+
+   Returns AKEY_NONE for glyphs that aren't shifted punctuation. The returned
+   AKEY already has AKEY_SHFT baked in where applicable, so callers must NOT
+   OR the modifier's shift bit on top. */
+static int shifted_glyph_to_akey(int c) {
+  switch (c) {
+    case '!':  return AKEY_EXCLAMATION;   /* 0x5f */
+    case '@':  return AKEY_AT;            /* 0x75 — NOT SHFT|AKEY_2; Atari layout */
+    case '#':  return AKEY_HASH;          /* 0x5a */
+    case '$':  return AKEY_DOLLAR;        /* 0x58 */
+    case '%':  return AKEY_PERCENT;       /* 0x5d */
+    case '^':  return AKEY_CIRCUMFLEX;    /* 0x47 */
+    case '&':  return AKEY_AMPERSAND;     /* 0x5b */
+    case '*':  return AKEY_ASTERISK;      /* 0x07 */
+    case '(':  return AKEY_PARENLEFT;     /* 0x70 */
+    case ')':  return AKEY_PARENRIGHT;    /* 0x72 */
+    case '_':  return AKEY_UNDERSCORE;    /* 0x4e */
+    case '+':  return AKEY_PLUS;          /* 0x06 — NOT SHFT|AKEY_EQUAL */
+    /* Note: Atari has no direct '{' or '}' keycode — AKEY_BRACKETLEFT (0x60)
+       already has bit 0x40 set, so AKEY_SHFT|AKEY_BRACKETLEFT == AKEY_BRACKETLEFT
+       and collapses to '[' on the matrix. We leave them unmapped; callers must
+       use Atari's own escape sequences for brace glyphs if needed. */
+    case '|':  return AKEY_BAR;           /* 0x4f */
+    case ':':  return AKEY_COLON;         /* 0x42 */
+    case '"':  return AKEY_DBLQUOTE;      /* 0x5e */
+    case '<':  return AKEY_LESS;          /* 0x36 */
+    case '>':  return AKEY_GREATER;       /* 0x37 */
+    case '?':  return AKEY_QUESTION;      /* 0x66 */
     default:   return AKEY_NONE;
   }
 }
 
 int keymap_default(int key, const km_modifiers_t* mods) {
   int base = AKEY_NONE;
+  int shifted_implicit = 0;  /* set when base already reflects SHIFT */
 
   if (key >= 'a' && key <= 'z') base = letter_akey[key - 'a'];
   else if (key >= 'A' && key <= 'Z') base = letter_akey[key - 'A']; /* shift applied below */
@@ -80,26 +147,79 @@ int keymap_default(int key, const km_modifiers_t* mods) {
   else if (key == KM_KEY_ESCAPE) base = AKEY_ESCAPE;
   else if (key == KM_KEY_TAB)    base = AKEY_TAB;
   else if (key == KM_KEY_BACKSP) base = AKEY_BACKSPACE;
-  else                           base = punct_to_akey(key);
+  else {
+    base = punct_to_akey(key);
+    if (base == AKEY_NONE) {
+      /* Not plain punct — try the shifted-glyph table. These AKEYs already
+         encode SHIFT (directly, via the precomputed glyph code), so we must
+         not additionally OR mods->shift below. */
+      base = shifted_glyph_to_akey(key);
+      if (base != AKEY_NONE) shifted_implicit = 1;
+    }
+  }
 
   if (base == AKEY_NONE) return AKEY_NONE;
 
-  /* Apply modifiers. The M5Cardputer keymap gives us character values that
-     ALREADY reflect shift (uppercase A-Z, shifted punctuation) — but Shift
-     is also reported as a separate modifier bit. For Atari, Shift needs to
-     be OR'd in explicitly when we want the matrix-level SHIFTed variant.
-     We always OR it when the modifier is set; the caller ensures the key
-     value is the "unshifted" glyph (we fold A-Z → a-z above, so Shift+'A'
-     from the user comes through as key='A', mods.shift=1 → letter table
-     gives a-z mapping, then OR AKEY_SHFT). */
+  /* Apply modifiers. For shifted-glyph returns, SHIFT is already encoded in
+     the AKEY value — OR'ing mods->shift again would double-apply it (no-op
+     since the bit is already set, but could mask a future CTRL+shifted-glyph
+     case); explicitly skip the shift OR for clarity. */
   if (mods && mods->ctrl)  base |= AKEY_CTRL;
-  if (mods && mods->shift) base |= AKEY_SHFT;
+  if (mods && mods->shift && !shifted_implicit) base |= AKEY_SHFT;
   return base;
 }
 
-/* Fn layer is wired in T3. Stub for now so linkage works. */
+/* --- Fn layer --- */
+
+/* INPUT_CONSOL_* bit masks (lib/atari800/src/input.h:10-14). */
+#define INPUT_CONSOL_START   0x01
+#define INPUT_CONSOL_SELECT  0x02
+#define INPUT_CONSOL_OPTION  0x04
+
+/* Cursor keys produce pre-baked matrix codes in akey.h. */
+#define AKEY_UP     0x8e
+#define AKEY_DOWN   0x8f
+#define AKEY_LEFT   0x86
+#define AKEY_RIGHT  0x87
+#define AKEY_HELP   0x11
+
+static km_out_t mk_none(void)              { km_out_t o = { KM_OUT_NONE,    0 }; return o; }
+static km_out_t mk_akey(int v)             { km_out_t o = { KM_OUT_AKEY,    v }; return o; }
+static km_out_t mk_consol(int v)           { km_out_t o = { KM_OUT_CONSOL,  v }; return o; }
+static km_out_t mk_action(km_action_t a)   { km_out_t o = { KM_OUT_ACTION,  (int)a }; return o; }
+
 km_out_t keymap_fn(int key, const km_modifiers_t* mods) {
-  (void)key; (void)mods;
-  km_out_t out = { KM_OUT_NONE, 0 };
-  return out;
+  (void)mods;  /* Fn is the only required modifier; Shift/Ctrl are ignored in Fn layer */
+
+  switch (key) {
+    case '1': return mk_consol(INPUT_CONSOL_OPTION);
+    case '2': return mk_consol(INPUT_CONSOL_SELECT);
+    case '3': return mk_consol(INPUT_CONSOL_START);
+    case '4': return mk_action(KM_ACT_WARM_RESET);
+    case '5': return mk_action(KM_ACT_COLD_RESET);
+    case '6': return mk_akey(AKEY_HELP);
+    case '7': return mk_action(KM_ACT_BREAK);
+    case '8': return mk_action(KM_ACT_MENU_OPEN);
+    case '9': return mk_action(KM_ACT_SAVE_STATE);
+    case '0': return mk_action(KM_ACT_LOAD_STATE);
+
+    /* Cursor cluster (printed arrows on keys) */
+    case ';': return mk_akey(AKEY_UP);
+    case '.': return mk_akey(AKEY_DOWN);
+    case ',': return mk_akey(AKEY_LEFT);
+    case '/': return mk_akey(AKEY_RIGHT);
+
+    /* Brightness / volume / display mode */
+    case '[':  return mk_action(KM_ACT_BRIGHTNESS_DOWN);
+    case ']':  return mk_action(KM_ACT_BRIGHTNESS_UP);
+    case '-':  return mk_action(KM_ACT_VOLUME_DOWN);
+    case '=':  return mk_action(KM_ACT_VOLUME_UP);
+    case '\\': return mk_action(KM_ACT_DISPLAY_MODE_CYCLE);
+
+    /* Letters (case-insensitive: M5Cardputer returns 'i' not 'I' for Fn+i) */
+    case 'i': case 'I': return mk_action(KM_ACT_INVERSE_VIDEO);
+    case 'j': case 'J': return mk_action(KM_ACT_TOGGLE_INPUT_MODE);
+
+    default: return mk_none();
+  }
 }
