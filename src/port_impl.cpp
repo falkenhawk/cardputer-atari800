@@ -247,4 +247,26 @@ int  INPUT_Playingback(void)                    { return 0; }
 void INPUT_RecordInt(int i)                     { (void)i; }
 int  INPUT_PlaybackInt(void)                    { return 0; }
 
+/* ----- sound.h stubs — real I2S pump lives in src/audio/audio_out.cpp (T10).
+   Weak Sound_Update so T10 can strong-override. Pause/Continue are no-ops
+   here; T10 may extend. */
+
+int  Sound_enabled = 1;
+
+int Sound_Initialise(int* argc, char* argv[]) {
+  (void)argc; (void)argv;
+  Serial.println("Sound_Initialise (stub — real init in audio_out.cpp when T10 lands)");
+  return 1;
+}
+void Sound_Exit(void) {}
+
+__attribute__((weak))
+void Sound_Update(void) {
+  /* Overridden by audio_out.cpp in T10. Weak so linkage stays clean while
+     T10 is in progress. */
+}
+
+void Sound_Pause(void)    {}
+void Sound_Continue(void) {}
+
 } /* extern "C" */

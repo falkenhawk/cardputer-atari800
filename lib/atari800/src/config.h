@@ -24,12 +24,19 @@
    the ADV has only 205 KB contiguous DRAM after M1/M2 static data. */
 #define PAGED_ATTRIB 1
 
-/* Features we disable for embedded build */
-#undef SOUND                  /* M3 will enable */
-#undef STEREO_SOUND
-#undef SERIO_SOUND
-#undef CONSOLE_SOUND
-#undef SYNCHRONIZED_SOUND
+/* Sound: enabled as of M3/T9. POKEY_Update macro guard in pokey.c:181-183
+   flips to the real POKEYSND_Update_ptr dispatch; pokeysnd.c (already
+   compiled in M2 via srcFilter +<*>) now actually receives register writes.
+   STEREO_SOUND stays OFF — dual-POKEY is a runtime flag via POKEYSND_num_pokeys,
+   not a compile-time switch.
+   SOUND_THIN_API stays OFF — we don't use the thin-API path (it would need
+   a PLATFORM_SoundSetup we don't have). */
+#define SOUND
+#undef  STEREO_SOUND
+#undef  SERIO_SOUND
+#undef  CONSOLE_SOUND
+#undef  SYNCHRONIZED_SOUND
+#undef  SOUND_THIN_API
 #undef NETSIO
 #undef MONITOR_BREAK
 #undef MONITOR_BREAKPOINTS
