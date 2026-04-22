@@ -34,3 +34,6 @@ add_test(NAME keymap COMMAND test_keymap)
 
 add_executable(test_joystick test_joystick.c ../src/input/joystick.c)
 add_test(NAME joystick COMMAND test_joystick)
+
+add_executable(test_mode test_mode.c ../src/input/mode.c)
+add_test(NAME mode COMMAND test_mode)
