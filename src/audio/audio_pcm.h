@@ -13,6 +13,7 @@ extern "C" {
 #define AUDIO_PCM_VIDEO_HZ_PAL      50
 #define AUDIO_PCM_OUTPUT_CHANNELS   2
 #define AUDIO_PCM_FRAMES_PER_PUMP   (AUDIO_PCM_SAMPLE_RATE / AUDIO_PCM_VIDEO_HZ_PAL)
+#define AUDIO_PCM_STREAM_CHUNK_FRAMES 256
 
 int audio_pcm_frames_per_video_frame(int sample_rate, int video_hz);
 void audio_pcm_recenter_pokey16(int16_t* samples, int count);

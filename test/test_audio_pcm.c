@@ -14,6 +14,12 @@ int main(void) {
         "48 kHz / 50 Hz -> 960 frames per pump");
   CHECK(audio_pcm_frames_per_video_frame(44100, 50) == 882,
         "44.1 kHz / 50 Hz -> 882 frames per pump");
+  CHECK(AUDIO_PCM_STREAM_CHUNK_FRAMES > 0,
+        "stream chunk has a positive frame count");
+  CHECK(AUDIO_PCM_STREAM_CHUNK_FRAMES < AUDIO_PCM_FRAMES_PER_PUMP,
+        "stream chunk is shorter than a video-frame pump");
+  CHECK((AUDIO_PCM_STREAM_CHUNK_FRAMES % 2) == 0,
+        "stream chunk keeps stereo DMA writes frame-aligned");
 
   int16_t pokey[4] = {-32768, -30000, -1, 0};
   audio_pcm_recenter_pokey16(pokey, 4);

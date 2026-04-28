@@ -22,6 +22,7 @@ namespace audio_out {
   /* Volume delta, signed (+ or -). Clamps to [0, 255]. */
   void set_volume_delta(int8_t delta);
 
-  /* Called once per atari frame from the weak Sound_Update override. */
+  /* Called once per atari frame from the weak Sound_Update override.
+     Audio is streamed by a background task, so this is intentionally cheap. */
   void pump();
 }

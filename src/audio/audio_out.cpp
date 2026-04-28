@@ -11,6 +11,8 @@
 #include <driver/i2s.h>
 #include <driver/gpio.h>
 #include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -31,20 +33,22 @@ constexpr i2s_port_t I2S_PORT = I2S_NUM_1;
 
 constexpr uint8_t ES8311_ADDR = 0x18;
 
-/* Match M5Unified's Cardputer-Adv codec default. One pump happens at the end
-   of each PAL Atari frame, so the buffer must contain 20 ms of PCM. */
 constexpr int SAMPLE_RATE       = AUDIO_PCM_SAMPLE_RATE;
-constexpr int FRAMES_PER_BUFFER = AUDIO_PCM_FRAMES_PER_PUMP;
+constexpr int FRAMES_PER_BUFFER = AUDIO_PCM_STREAM_CHUNK_FRAMES;
 constexpr int OUTPUT_CHANNELS   = AUDIO_PCM_OUTPUT_CHANNELS;
+constexpr uint32_t AUDIO_TASK_STACK = 3072;
+constexpr UBaseType_t AUDIO_TASK_PRIORITY = 2;
 
-bool     g_muted    = false;
+volatile bool g_muted    = false;
 uint8_t  g_vol_reg  = 0xBF;
 
-bool     g_i2s_ok   = false;
-bool     g_pokey_ok = false;
-bool     g_stereo   = false;
+volatile bool g_i2s_ok   = false;
+volatile bool g_pokey_ok = false;
+volatile bool g_stereo   = false;
+volatile bool g_task_running = false;
 
 int16_t* g_buf      = nullptr;
+TaskHandle_t g_audio_task = nullptr;
 
 bool es8311_write(uint8_t reg, uint8_t val) {
   return M5.In_I2C.writeRegister8(ES8311_ADDR, reg, val, 400000);
@@ -106,6 +110,47 @@ bool i2s_init_legacy() {
   return true;
 }
 
+void audio_task(void*) {
+  uint32_t stream_count = 0;
+  const size_t bytes = FRAMES_PER_BUFFER * OUTPUT_CHANNELS * sizeof(int16_t);
+
+  while (g_task_running) {
+    if (!g_i2s_ok || !g_pokey_ok || !g_buf) {
+      vTaskDelay(pdMS_TO_TICKS(1));
+      continue;
+    }
+
+    uint32_t t0 = micros();
+    bool stereo = g_stereo;
+    if (g_muted) {
+      memset(g_buf, 0, bytes);
+    } else {
+      pokey_fast_fill(g_buf, FRAMES_PER_BUFFER, stereo ? 1 : 0, SAMPLE_RATE);
+      if (!stereo) {
+        audio_pcm_expand_mono_to_stereo(g_buf, FRAMES_PER_BUFFER);
+      }
+    }
+    uint32_t t1 = micros();
+
+    size_t written = 0;
+    i2s_write(I2S_PORT, g_buf, bytes, &written, portMAX_DELAY);
+    uint32_t t2 = micros();
+
+    if ((stream_count % 200) == 0) {
+      Serial.printf("audio stream %lu: pokey=%lu i2s=%lu written=%u s[0..3]=%d,%d,%d,%d\n",
+                    (unsigned long)stream_count,
+                    (unsigned long)(t1 - t0),
+                    (unsigned long)(t2 - t1),
+                    (unsigned)written,
+                    g_buf[0], g_buf[1], g_buf[2], g_buf[3]);
+    }
+    stream_count++;
+  }
+
+  g_audio_task = nullptr;
+  vTaskDelete(nullptr);
+}
+
 } /* anonymous namespace */
 
 namespace audio_out {
@@ -120,6 +165,11 @@ bool preallocate_buffers() {
 }
 
 bool start(int initial_stereo) {
+  if (!g_buf) {
+    Serial.println("audio(raw): no preallocated buffer");
+    return false;
+  }
+
   multi_heap_info_t hi;
   heap_caps_get_info(&hi, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   Serial.printf("audio(raw): pre-init heap DMA|INT|8: free=%u largest=%u\n",
@@ -143,8 +193,20 @@ bool start(int initial_stereo) {
   pokey_fast_reset();
   g_pokey_ok = true;
 
-  Serial.printf("audio(raw): started i2s_ok=%d pokey_ok=%d stereo=%d\n",
-                g_i2s_ok, g_pokey_ok, g_stereo);
+  g_task_running = true;
+  BaseType_t task_ok = xTaskCreate(audio_task, "audio_i2s",
+                                   AUDIO_TASK_STACK, nullptr,
+                                   AUDIO_TASK_PRIORITY, &g_audio_task);
+  if (task_ok != pdPASS) {
+    g_task_running = false;
+    g_pokey_ok = false;
+    Serial.println("audio(raw): audio task create failed");
+    return false;
+  }
+
+  Serial.printf("audio(raw): started i2s_ok=%d pokey_ok=%d stereo=%d chunk=%d\n",
+                g_i2s_ok ? 1 : 0, g_pokey_ok ? 1 : 0, g_stereo ? 1 : 0,
+                FRAMES_PER_BUFFER);
   return true;
 }
 
@@ -173,32 +235,8 @@ void set_volume_delta(int8_t delta) {
 }
 
 void pump() {
-  if (!g_i2s_ok || !g_pokey_ok || g_muted) return;
-  if (!g_buf) return;
-
-  uint32_t t0 = micros();
-  pokey_fast_fill(g_buf, FRAMES_PER_BUFFER, g_stereo ? 1 : 0, SAMPLE_RATE);
-  if (!g_stereo) {
-    audio_pcm_expand_mono_to_stereo(g_buf, FRAMES_PER_BUFFER);
-  }
-  uint32_t t1 = micros();
-
-  size_t written = 0;
-  i2s_write(I2S_PORT, g_buf,
-            FRAMES_PER_BUFFER * OUTPUT_CHANNELS * sizeof(int16_t),
-            &written, pdMS_TO_TICKS(30));
-  uint32_t t2 = micros();
-
-  static uint32_t pump_count = 0;
-  if ((pump_count % 50) == 0) {
-    Serial.printf("pump %lu: pokey=%lu i2s=%lu written=%u s[0..3]=%d,%d,%d,%d\n",
-                  (unsigned long)pump_count,
-                  (unsigned long)(t1 - t0),
-                  (unsigned long)(t2 - t1),
-                  (unsigned)written,
-                  g_buf[0], g_buf[1], g_buf[2], g_buf[3]);
-  }
-  pump_count++;
+  /* The audio task keeps I2S fed continuously. Sound_Update still lands once
+     per emulated frame, but it must not block rendering or keyboard input. */
 }
 
 } /* namespace audio_out */
