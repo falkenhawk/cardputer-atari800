@@ -41,5 +41,14 @@ add_test(NAME mode COMMAND test_mode)
 add_executable(test_pokey_glue test_pokey_glue.c ../src/audio/pokey_glue.c)
 add_test(NAME pokey_glue COMMAND test_pokey_glue)
 
+add_executable(test_audio_pcm test_audio_pcm.c ../src/audio/audio_pcm.c)
+add_test(NAME audio_pcm COMMAND test_audio_pcm)
+
+add_executable(test_pokey_fast test_pokey_fast.c ../src/audio/pokey_fast.c)
+add_test(NAME pokey_fast COMMAND test_pokey_fast)
+
+add_executable(test_rom_args test_rom_args.c ../src/roms/rom_args.c)
+add_test(NAME rom_args COMMAND test_rom_args)
+
 add_executable(test_settings test_settings.c ../src/settings/settings.c)
 add_test(NAME settings COMMAND test_settings)

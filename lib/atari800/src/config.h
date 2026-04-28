@@ -27,12 +27,14 @@
 /* Sound: enabled as of M3/T9. POKEY_Update macro guard in pokey.c:181-183
    flips to the real POKEYSND_Update_ptr dispatch; pokeysnd.c (already
    compiled in M2 via srcFilter +<*>) now actually receives register writes.
-   STEREO_SOUND stays OFF — dual-POKEY is a runtime flag via POKEYSND_num_pokeys,
-   not a compile-time switch.
+   STEREO_SOUND must stay ON so a runtime dual-POKEY toggle can emit separate
+   left/right samples when POKEYSND_num_pokeys is set to 2.
    SOUND_THIN_API stays OFF — we don't use the thin-API path (it would need
    a PLATFORM_SoundSetup we don't have). */
 #define SOUND
-#undef  STEREO_SOUND
+#ifndef STEREO_SOUND
+#define STEREO_SOUND 1
+#endif
 #undef  SERIO_SOUND
 #undef  CONSOLE_SOUND
 #undef  SYNCHRONIZED_SOUND

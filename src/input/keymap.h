@@ -60,7 +60,8 @@ typedef enum {
   KM_ACT_MENU_OPEN,         /* Fn+8 */
   KM_ACT_SAVE_STATE,        /* Fn+9 — M5 stub */
   KM_ACT_LOAD_STATE,        /* Fn+0 — M5 stub */
-  KM_ACT_LOAD_XEX           /* Fn+L — reload /atari800/test.xex from SD */
+  KM_ACT_LOAD_XEX,          /* Fn+L — reload /atari800/test.xex from SD */
+  KM_ACT_SCREENSHOT         /* Fn+P — dump LCD framebuffer to BMP on SD */
 } km_action_t;
 
 typedef struct {

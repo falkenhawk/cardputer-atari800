@@ -2,6 +2,7 @@
 #include "projector.h"
 #include "palette.h"
 #include "lcd.h"
+#include "screenshot.h"
 
 namespace renderer {
 
@@ -22,6 +23,11 @@ void set_region_ntsc(bool ntsc) { use_ntsc = ntsc; }
 void present(const uint8_t* screen_atari) {
   const uint16_t* pal = use_ntsc ? palette_get_ntsc() : palette_get_pal();
   uint16_t line_buf[LCD_W];
+
+  /* Screenshot capture: if armed, begin() opens the file + writes BMP
+     header. write_line() called after each lcd::push_line to persist
+     exactly the bytes we sent. end() closes + flushes after the last row. */
+  bool capturing = screenshot::is_armed() && screenshot::begin(LCD_W, LCD_H);
 
   // Active picture area in Screen_atari (384×240 buffer).
   // Atari's visible active picture is approximately rows 24..215 (192 rows).
@@ -69,7 +75,10 @@ void present(const uint8_t* screen_atari) {
     }
 
     lcd::push_line(y, line_buf, LCD_W);
+    if (capturing) screenshot::write_line(line_buf, LCD_W);
   }
+
+  if (capturing) screenshot::end();
 }
 
 } // namespace renderer

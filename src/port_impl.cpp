@@ -269,4 +269,16 @@ void Sound_Update(void) {
 void Sound_Pause(void)    {}
 void Sound_Continue(void) {}
 
+/* mzpokeysnd.c is not vendored — only the classic Ron Fries path in
+   pokeysnd.c is compiled in. POKEYSND_enable_new_pokey is forced FALSE in
+   pokey_glue_init so MZPOKEYSND_Init is never called at runtime, but the
+   linker still needs the symbol (unconditional reference in pokeysnd.c:308).
+   Returning 0 here matches POKEYSND_Init's "failed" convention and would
+   make any accidental call visible. */
+int MZPOKEYSND_Init(ULONG freq17, int playback_freq, UBYTE num_pokeys,
+                    int flags, int quality) {
+  (void)freq17; (void)playback_freq; (void)num_pokeys; (void)flags; (void)quality;
+  return 0;
+}
+
 } /* extern "C" */

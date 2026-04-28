@@ -8,7 +8,7 @@
     "includeDir": "src",
     "flags": [
       "-I$PROJECT_INCLUDE_DIR",
-      "-DSTEREO_SOUND=0",
+      "-DSTEREO_SOUND=1",
       "-DCARDPUTER_ATARI800",
       "-Wno-implicit-function-declaration",
       "-Wno-unused-variable",

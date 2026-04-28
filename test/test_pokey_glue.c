@@ -19,7 +19,9 @@ long POKEYSND_playback_freq    = 44100;
 static int mock_init_called_with_freq = 0;
 static int mock_init_called_with_num_pokeys = 0;
 static int mock_init_called_with_flags = 0;
-static int mock_init_return_val = 1;
+/* POKEYSND_Init's real semantic (pokeysnd.c:459): 0 = success, nonzero = error.
+   Default mock = 0 so pokey_glue_init returns our "1 = success" convention. */
+static int mock_init_return_val = 0;
 
 int POKEYSND_Init(unsigned long freq17, int playback_freq,
                   unsigned char num_pokeys, int flags) {
@@ -55,11 +57,11 @@ int main(void) {
   CHECK(mock_init_called_with_num_pokeys == 2, "stereo -> num_pokeys=2");
   CHECK(POKEYSND_stereo_enabled == 1, "stereo flag set");
 
-  /* Init failure propagates */
-  mock_init_return_val = 0;
+  /* Init failure: POKEYSND_Init returns nonzero → pokey_glue_init returns 0 */
+  mock_init_return_val = -1;
   ok = pokey_glue_init(44100, 0);
   CHECK(ok == 0, "init failure propagates");
-  mock_init_return_val = 1;
+  mock_init_return_val = 0;   /* restore success for subsequent tests */
 
   /* Process: 441 frames stereo = 882 samples */
   int16_t buf[882];

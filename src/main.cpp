@@ -8,9 +8,12 @@
 #include <errno.h>
 #include <esp_heap_caps.h>
 
+#include "audio/audio_out.h"
 #include "display/lcd.h"
 #include "display/renderer.h"
+#include "display/screenshot.h"
 #include "input/input_port.h"
+#include "roms/rom_args.h"
 
 extern "C" {
 #include "input/mode.h"
@@ -25,6 +28,8 @@ extern "C" {
 
 
 extern "C" void ensure_memory_mem_allocated(void);
+extern "C" void ensure_under_atarixl_os_allocated(void);
+extern "C" void ensure_under_cart_buffers_allocated(void);
 extern "C" void ensure_under_buffers_allocated(void);
 extern "C" void* debug_get_under_atarixl_os(void);
 extern "C" void* debug_get_under_cart809F(void);
@@ -116,7 +121,24 @@ static void on_input_action(km_action_t act) {
       try_load_xex("/atari800/test.xex");
       break;
 
-    case KM_ACT_VOLUME_DOWN: case KM_ACT_VOLUME_UP:       /* T10 wires audio */
+    case KM_ACT_SCREENSHOT:
+      /* Renderer::present() picks up the armed flag on the next frame and
+         writes a BMP to /sd/atari800/screenshots/shot_<millis>.bmp. */
+      Serial.println("action: screenshot");
+      screenshot::arm();
+      break;
+
+    case KM_ACT_VOLUME_DOWN: {
+      audio_out::set_volume_delta(-16);
+      Serial.printf("volume: %u\n", M5Cardputer.Speaker.getVolume());
+      break;
+    }
+    case KM_ACT_VOLUME_UP: {
+      audio_out::set_volume_delta(+16);
+      Serial.printf("volume: %u\n", M5Cardputer.Speaker.getVolume());
+      break;
+    }
+
     case KM_ACT_MENU_OPEN:                                /* T15 wires menu */
     case KM_ACT_SAVE_STATE: case KM_ACT_LOAD_STATE:       /* M5 stubs */
     case KM_ACT_INVERSE_VIDEO:
@@ -131,8 +153,31 @@ static constexpr int SD_PIN_SCK  = 40;
 static constexpr int SD_PIN_MISO = 39;
 static constexpr int SD_PIN_MOSI = 14;
 static constexpr int SD_PIN_CS   = 12;
+static constexpr uint8_t SD_MAX_OPEN_FILES = 1;
 
 static bool sd_mounted = false;
+
+static bool sd_file_has_size(const char* path, size_t expected_size) {
+  if (!sd_mounted || !path) return false;
+  File f = SD.open(path, FILE_READ);
+  if (!f) return false;
+  size_t actual = f.size();
+  f.close();
+  if (actual != expected_size) {
+    Serial.printf("rom: ignoring %s size=%u expected=%u\n",
+                  path, (unsigned)actual, (unsigned)expected_size);
+    return false;
+  }
+  return true;
+}
+
+static const char* select_rom_path(const char* sd_upper, const char* vfs_upper,
+                                   const char* sd_lower, const char* vfs_lower,
+                                   size_t expected_size) {
+  if (sd_file_has_size(sd_upper, expected_size)) return vfs_upper;
+  if (sd_file_has_size(sd_lower, expected_size)) return vfs_lower;
+  return nullptr;
+}
 
 static bool mount_sd() {
   // Absolute-minimum mount per M5Stack's official example. Previous attempts
@@ -142,7 +187,7 @@ static bool mount_sd() {
   // then rejects with ESP_ERR_INVALID_STATE. The minimum works on cold boot;
   // if M5Launcher handoff breaks it, that's a separate known limitation.
   SPI.begin(SD_PIN_SCK, SD_PIN_MISO, SD_PIN_MOSI, SD_PIN_CS);
-  if (!SD.begin(SD_PIN_CS, SPI, 25000000)) {
+  if (!SD.begin(SD_PIN_CS, SPI, 25000000, "/sd", SD_MAX_OPEN_FILES)) {
     Serial.println("SD: mount failed (no card? wrong format? first boot after Launcher handoff?)");
     return false;
   }
@@ -203,7 +248,7 @@ void setup() {
   delay(500);
   Serial.println();
   Serial.println("cardputer-atari800 — boot");
-  Serial.println("FW_VER=v0.3-m3-t7");
+  Serial.println("FW_VER=v0.3-m3-t10ai-audioshape");
 
   // ---- Heap diagnostics BEFORE any big allocations ----
   size_t free0  = ESP.getFreeHeap();
@@ -228,11 +273,10 @@ void setup() {
 
   // ---- Big contiguous allocations FIRST, while heap@entry has a 196 KB
   //      contiguous block. Packing is tight: we need 92 + 65 + 16 = 173 KB
-  //      contiguous (Screen + MEMORY_mem + under_xlos), which fits in 196 KB
-  //      with ~23 KB to spare. Previous ordering (SD first) dropped largest
-  //      to 172 KB and failed this packing by ~1 KB. SD mount is last now —
-  //      its FATFS state (~27 KB across several small allocs) goes into the
-  //      fragments left behind.
+  //      contiguous (Screen + MEMORY_mem + under_xlos), which fits in 196 KB.
+  //      SD cannot mount before those three allocations, because that
+  //      fragments the large block. The cart shadows must also exist before
+  //      the core starts. To make SD fit afterward, mount it with max_files=1.
 
   // ---- The real Screen_atari allocation ----
   // atari800 core only needs Screen_WIDTH * Screen_HEIGHT = 384*240 = 92160
@@ -261,9 +305,8 @@ void setup() {
                 (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 
   // ---- XL/XE shadow buffers (under_atarixl_os 16 KB + under_cart809F 8 KB +
-  //      under_cartA0BF 8 KB = 32 KB). 16 KB goes into the big block's
-  //      leftover (~23 KB after Screen+MEMORY_mem); the two 8 KB ones find
-  //      small-block slots.
+  //      under_cartA0BF 8 KB = 32 KB). All three must be non-null before
+  //      Atari800_Initialise(), otherwise PORTB bank switching can crash.
   ensure_under_buffers_allocated();
   Serial.printf("heap@post-under-alloc: free=%u largest=%u xlos=%p 809F=%p A0BF=%p\n",
                 (unsigned)ESP.getFreeHeap(),
@@ -272,13 +315,25 @@ void setup() {
                 debug_get_under_cart809F(),
                 debug_get_under_cartA0BF());
 
-  // ---- Mount SD LAST, after the big contiguous allocs. FATFS' internal
-  //      allocations are small (~4-8 KB chunks) and fit in fragments.
+  // ---- Mount SD after the required Atari shadows, using a small VFS file
+  //      table. t10ad used the default max_files=5 and failed with
+  //      ESP_ERR_NO_MEM while largest free was 19444.
   sd_mounted = mount_sd();
   Serial.printf("heap@post-sd: free=%u largest=%u sd=%d\n",
                 (unsigned)ESP.getFreeHeap(),
                 (unsigned)ESP.getMaxAllocHeap(),
                 sd_mounted ? 1 : 0);
+
+  // Audio pre-alloc AFTER SD mount. t10e-diag confirmed SD mount works when
+  // this call is SKIPPED; t10f re-enables it to see if the malloc path
+  // affects anything in-flight.
+  if (!audio_out::preallocate_buffers()) {
+    Serial.println("audio: preallocate_buffers FAILED");
+  } else {
+    Serial.println("audio: buffers pre-allocated");
+  }
+  Serial.printf("heap@post-audio-prealloc: free=%u largest=%u\n",
+                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);  // true = enableKeyboard (default)
@@ -297,7 +352,7 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.3-m3-t7");
+  d.print("v0.3-m3-t10ai-audioshape");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");
@@ -329,8 +384,18 @@ void setup() {
   // M2 never hit this because T14 jumped straight to xex loading; T2's
   // HUMAN CHECKPOINT needs BASIC to boot so typing has something to echo to.
   Serial.println("core: initialising atari800...");
-  int argc = 2;
-  char* argv[] = {(char*)"atari800", (char*)"-basic"};
+  const char* os_rom_path = select_rom_path(ROM_ARGS_SD_OS_ROM, ROM_ARGS_VFS_OS_ROM,
+                                            ROM_ARGS_SD_OS_ROM_LC, ROM_ARGS_VFS_OS_ROM_LC,
+                                            ROM_ARGS_OS_ROM_BYTES);
+  const char* basic_rom_path = select_rom_path(ROM_ARGS_SD_BASIC_ROM, ROM_ARGS_VFS_BASIC_ROM,
+                                               ROM_ARGS_SD_BASIC_ROM_LC, ROM_ARGS_VFS_BASIC_ROM_LC,
+                                               ROM_ARGS_BASIC_ROM_BYTES);
+  Serial.printf("rom: %s %s\n",
+                os_rom_path ? os_rom_path : "using embedded XL OS",
+                basic_rom_path ? basic_rom_path : "using embedded BASIC");
+
+  char* argv[ROM_ARGS_MAX];
+  int argc = rom_args_build(argv, ROM_ARGS_MAX, os_rom_path, basic_rom_path);
   int init_ok = Atari800_Initialise(&argc, argv);
   Serial.printf("core: init_ok=%d\n", init_ok);
 
@@ -346,6 +411,17 @@ void setup() {
   lcd::init();
   renderer::set_mode(renderer::Mode::Stretch);
   renderer::set_region_ntsc(false);
+
+  // Audio — now running raw ESP-IDF i2s_std + direct ES8311 codec writes via
+  // M5.In_I2C. No M5Unified Speaker_Class involved, so the 1 KB BSS-shrink-
+  // breaks-SD regression doesn't apply here.
+  if (audio_out::start(0 /* mono */)) {
+    Serial.println("audio: started (mono, raw i2s_std path)");
+  } else {
+    Serial.println("audio: start FAILED");
+  }
+  Serial.printf("heap@post-audio-start: free=%u largest=%u\n",
+                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 
   size_t free_heap = ESP.getFreeHeap();
   Serial.printf("heap: free=%u bytes after core init\n", (unsigned)free_heap);
@@ -388,12 +464,22 @@ void loop() {
       Serial.printf("frame %d begin\n", frame_count);
       dump_shadow_ptrs("pre-frame");
     }
+    uint32_t t_af = micros();
     Atari800_Frame();
+    uint32_t t_render = micros();
+    renderer::present(reinterpret_cast<const uint8_t*>(Screen_atari));
+    uint32_t t_end = micros();
+    if ((frame_count % 50) == 0) {
+      Serial.printf("frame %d: atari=%lu render=%lu total=%lu\n",
+                    frame_count,
+                    (unsigned long)(t_render - t_af),
+                    (unsigned long)(t_end - t_render),
+                    (unsigned long)(t_end - t_af));
+    }
     if (frame_count < 3) {
       Serial.printf("frame %d done\n", frame_count);
     }
     frame_count++;
-    renderer::present(reinterpret_cast<const uint8_t*>(Screen_atari));
   }
 
   // Heartbeat (every 10s) — proof the main loop is healthy.

@@ -120,11 +120,14 @@ static UBYTE *under_atarixl_os = NULL;
 static UBYTE *under_cart809F   = NULL;
 static UBYTE *under_cartA0BF   = NULL;
 
-void ensure_under_buffers_allocated(void) {
+void ensure_under_atarixl_os_allocated(void) {
 	if (!under_atarixl_os) {
 		under_atarixl_os = (UBYTE*)ps_malloc(16384);
 		if (!under_atarixl_os) under_atarixl_os = (UBYTE*)malloc(16384);
 	}
+}
+
+void ensure_under_cart_buffers_allocated(void) {
 	if (!under_cart809F) {
 		under_cart809F = (UBYTE*)ps_malloc(8192);
 		if (!under_cart809F) under_cart809F = (UBYTE*)malloc(8192);
@@ -133,6 +136,11 @@ void ensure_under_buffers_allocated(void) {
 		under_cartA0BF = (UBYTE*)ps_malloc(8192);
 		if (!under_cartA0BF) under_cartA0BF = (UBYTE*)malloc(8192);
 	}
+}
+
+void ensure_under_buffers_allocated(void) {
+	ensure_under_atarixl_os_allocated();
+	ensure_under_cart_buffers_allocated();
 }
 
 /* Diagnostic getters so main.cpp can inspect the shadow-buffer pointers

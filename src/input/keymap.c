@@ -220,6 +220,7 @@ km_out_t keymap_fn(int key, const km_modifiers_t* mods) {
     case 'i': case 'I': return mk_action(KM_ACT_INVERSE_VIDEO);
     case 'j': case 'J': return mk_action(KM_ACT_TOGGLE_INPUT_MODE);
     case 'l': case 'L': return mk_action(KM_ACT_LOAD_XEX);
+    case 'p': case 'P': return mk_action(KM_ACT_SCREENSHOT);
 
     default: return mk_none();
   }

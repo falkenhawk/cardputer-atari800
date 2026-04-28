@@ -19,15 +19,18 @@ extern void POKEYSND_Process(void* buf, int sndn);
 #define BIT16 0x01
 
 int pokey_glue_init(int playback_freq, int stereo) {
-  /* Step 1: mzpokeysnd is absent — force the classic path. */
+  /* Step 1: mzpokeysnd is absent — force the classic Ron Fries path. */
   POKEYSND_enable_new_pokey = 0;
   POKEYSND_stereo_enabled   = stereo ? 1 : 0;
 
   int num_pokeys = stereo ? 2 : 1;
   int flags      = BIT16;
-  int ok = POKEYSND_Init(FREQ_17_APPROX, playback_freq,
-                         (unsigned char)num_pokeys, flags);
-  return ok;
+  /* POKEYSND_Init returns 0 on success, non-zero on error — see
+     pokeysnd.c line 459 (the "return 0; OK" comment). Invert to the
+     common "1 = success" convention for our caller. */
+  int err = POKEYSND_Init(FREQ_17_APPROX, playback_freq,
+                          (unsigned char)num_pokeys, flags);
+  return (err == 0) ? 1 : 0;
 }
 
 void pokey_glue_fill(int16_t* buf, int frames, int stereo) {
