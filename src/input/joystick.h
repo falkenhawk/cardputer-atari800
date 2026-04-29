@@ -42,6 +42,15 @@ typedef struct {
 void joystick_resolve(const joy_state_t* in,
                       uint8_t* nibble_out, int* fire_out);
 
+/* Apply the resolved joystick state to Atari hardware-facing registers.
+   Drives joystick port 1 directions and trigger 1. Also explicitly releases
+   trigger 2; leaving it at the C zero default looks like a permanently
+   pressed second fire button to games that check both trigger lines. */
+void joystick_apply_to_atari(uint8_t* pia_port0,
+                             uint8_t gtia_trig[4],
+                             uint8_t nibble,
+                             int fire);
+
 #ifdef __cplusplus
 }
 #endif

@@ -72,6 +72,21 @@ int main(void) {
   CHECK(p3.segs[0].start_addr == 0x3000, "seg[0] start");
   CHECK(p3.segs[1].start_addr == 0x4000, "seg[1] start");
 
+  /* Some XEX files contain repeated 0xFFFF markers at the start. The core
+     binary loader supports this, so file-type detection must not reject it
+     before the loader sees the file. */
+  uint8_t repeated_header[] = {
+    0xFF, 0xFF,
+    0xFF, 0xFF,
+    0x00, 0x50, 0x01, 0x50,
+    0x55, 0x66,
+  };
+  xex_parsed_t p4;
+  CHECK(xex_parse(repeated_header, sizeof(repeated_header), &p4),
+        "xex with repeated leading FFFF markers");
+  CHECK(p4.n_segs == 1 && p4.segs[0].start_addr == 0x5000,
+        "repeated leading FFFF markers resync to first segment");
+
   if (fail) return EXIT_FAILURE;
   printf("PASS: loader\n");
   return EXIT_SUCCESS;

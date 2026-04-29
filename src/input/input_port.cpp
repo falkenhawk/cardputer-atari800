@@ -181,10 +181,7 @@ void poll() {
     fire = 0;
   }
 
-  /* PIA_PORT_input[0]: low nibble = Joy-1, high nibble = Joy-2 (idle 0xF0). */
-  PIA_PORT_input[0] = (unsigned char)(0xF0 | nib);
-  /* GTIA_TRIG[0]: active-low (0 = pressed). */
-  GTIA_TRIG[0] = fire ? 0 : 1;
+  joystick_apply_to_atari(&PIA_PORT_input[0], GTIA_TRIG, nib, fire);
 
   /* Commit the "pressed this frame" set as "pressed last frame" for the
      next poll. */

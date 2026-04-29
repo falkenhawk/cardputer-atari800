@@ -21,3 +21,16 @@ void joystick_resolve(const joy_state_t* in,
   *nibble_out = nib;
   *fire_out   = (in->c1.fire | in->c1.fire2 | in->c2.fire | in->c2.fire2) ? 1 : 0;
 }
+
+void joystick_apply_to_atari(uint8_t* pia_port0,
+                             uint8_t gtia_trig[4],
+                             uint8_t nibble,
+                             int fire) {
+  if (pia_port0) {
+    *pia_port0 = (uint8_t)(0xF0 | (nibble & 0x0F));
+  }
+  if (gtia_trig) {
+    gtia_trig[0] = fire ? 0 : 1;
+    gtia_trig[1] = 1;
+  }
+}

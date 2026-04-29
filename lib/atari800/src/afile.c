@@ -129,7 +129,7 @@ int AFILE_DetectFileType(const char *filename)
 		fclose(fp);
 		return AFILE_DCM;
 	case 0xff:
-		if (header[1] == 0xff && (header[2] != 0xff || header[3] != 0xff)) {
+		if (header[1] == 0xff) {
 			fclose(fp);
 			return AFILE_XEX;
 		}
