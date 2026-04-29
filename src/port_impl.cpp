@@ -269,6 +269,18 @@ void Sound_Update(void) {
 void Sound_Pause(void)    {}
 void Sound_Continue(void) {}
 
+#ifdef SYNCHRONIZED_SOUND
+unsigned int Sound_latency = 20;
+
+void Sound_SetLatency(unsigned int latency) {
+  Sound_latency = latency;
+}
+
+double Sound_AdjustSpeed(void) {
+  return 1.0;
+}
+#endif
+
 /* mzpokeysnd.c is not vendored — only the classic Ron Fries path in
    pokeysnd.c is compiled in. POKEYSND_enable_new_pokey is forced FALSE in
    pokey_glue_init so MZPOKEYSND_Init is never called at runtime, but the

@@ -4,6 +4,11 @@
 .piolibdeps/
 .vscode/
 
+# clangd: generated/local; paths are user-specific
+compile_commands.json
+.clangd
+.cache/
+
 # CMake (host tests)
 build/
 CMakeCache.txt

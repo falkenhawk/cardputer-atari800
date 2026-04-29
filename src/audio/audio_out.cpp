@@ -18,9 +18,14 @@
 #include <string.h>
 
 extern "C" {
+#include "audio_console_speaker.h"
 #include "audio_pcm.h"
 #include "pokey_fast.h"
 #include "pokey_glue.h"
+
+extern unsigned int ANTIC_screenline_cpu_clock;
+extern int ANTIC_xpos;
+extern int Atari800_tv_mode;
 }
 
 namespace {
@@ -36,29 +41,56 @@ constexpr uint8_t ES8311_ADDR = 0x18;
 constexpr int SAMPLE_RATE       = AUDIO_PCM_SAMPLE_RATE;
 constexpr int FRAMES_PER_BUFFER = AUDIO_PCM_STREAM_CHUNK_FRAMES;
 constexpr int OUTPUT_CHANNELS   = AUDIO_PCM_OUTPUT_CHANNELS;
+constexpr int CONSOLE_RING_FRAMES = AUDIO_PCM_FRAMES_PER_PUMP + 64;
 constexpr uint32_t AUDIO_TASK_STACK = 3072;
 constexpr UBaseType_t AUDIO_TASK_PRIORITY = 2;
+constexpr int ATARI_TV_PAL_LINES = 312;
+constexpr int ATARI_TV_NTSC_LINES = 262;
+constexpr int ATARI_SCANLINE_TICKS = 114;
 
 volatile bool g_muted    = false;
-uint8_t  g_vol_reg  = 0xBF;
+/* ES8311 reg 0x32 is dB-attenuated DAC volume (0xFF = 0 dB max, ~0.5 dB/step,
+   0x00 = mute). 0xA0 ≈ -48 dB ≈ ~10% perceived. Old default 0xBF (-32 dB)
+   was ~30-50% perceived. Volume Up/Down adjusts ±16; configurable later via
+   settings persistence. */
+uint8_t  g_vol_reg  = 0xA0;
 
 volatile bool g_i2s_ok   = false;
 volatile bool g_pokey_ok = false;
 volatile bool g_stereo   = false;
 volatile bool g_task_running = false;
 
-int16_t* g_buf      = nullptr;
+int16_t* g_buf = nullptr;
+int16_t* g_console_buf = nullptr;
+audio_pcm_suppressor_t g_suppressor;
+portMUX_TYPE g_audio_mux = portMUX_INITIALIZER_UNLOCKED;
 TaskHandle_t g_audio_task = nullptr;
+
+uint32_t atari_cpu_clock_now() {
+  int64_t clock = (int64_t)ANTIC_screenline_cpu_clock + (int64_t)ANTIC_xpos;
+  return clock > 0 ? (uint32_t)clock : 0;
+}
+
+int atari_video_hz() {
+  return Atari800_tv_mode == ATARI_TV_NTSC_LINES ? 60 : 50;
+}
+
+int atari_ticks_per_frame() {
+  int lines = Atari800_tv_mode == ATARI_TV_NTSC_LINES
+                ? ATARI_TV_NTSC_LINES
+                : ATARI_TV_PAL_LINES;
+  return lines * ATARI_SCANLINE_TICKS;
+}
 
 bool es8311_write(uint8_t reg, uint8_t val) {
   return M5.In_I2C.writeRegister8(ES8311_ADDR, reg, val, 400000);
 }
 
 bool es8311_init() {
-  static const uint8_t regs[][2] = {
+  const uint8_t regs[][2] = {
     {0x00, 0x80}, {0x01, 0xB5}, {0x02, 0x18},
     {0x0D, 0x01}, {0x12, 0x00}, {0x13, 0x10},
-    {0x32, 0xBF}, {0x37, 0x08},
+    {0x32, g_vol_reg}, {0x37, 0x08},
   };
   for (size_t i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) {
     if (!es8311_write(regs[i][0], regs[i][1])) {
@@ -122,13 +154,25 @@ void audio_task(void*) {
 
     uint32_t t0 = micros();
     bool stereo = g_stereo;
+    int suppress = 0;
+    portENTER_CRITICAL(&g_audio_mux);
+    suppress = audio_pcm_suppressor_consume(&g_suppressor, FRAMES_PER_BUFFER);
+    if (g_muted || suppress) {
+      audio_console_speaker_discard(FRAMES_PER_BUFFER);
+    }
+    portEXIT_CRITICAL(&g_audio_mux);
     if (g_muted) {
+      memset(g_buf, 0, bytes);
+    } else if (suppress) {
       memset(g_buf, 0, bytes);
     } else {
       pokey_fast_fill(g_buf, FRAMES_PER_BUFFER, stereo ? 1 : 0, SAMPLE_RATE);
       if (!stereo) {
         audio_pcm_expand_mono_to_stereo(g_buf, FRAMES_PER_BUFFER);
       }
+      portENTER_CRITICAL(&g_audio_mux);
+      audio_console_speaker_mix_stereo(g_buf, FRAMES_PER_BUFFER);
+      portEXIT_CRITICAL(&g_audio_mux);
     }
     uint32_t t1 = micros();
 
@@ -160,7 +204,11 @@ bool preallocate_buffers() {
   g_buf = (int16_t*)heap_caps_malloc(bytes,
                                      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   if (!g_buf) return false;
+  g_console_buf = (int16_t*)heap_caps_malloc(CONSOLE_RING_FRAMES * sizeof(int16_t),
+                                             MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   memset(g_buf, 0, bytes);
+  audio_pcm_suppressor_init(&g_suppressor);
+  audio_console_speaker_init(g_console_buf, g_console_buf ? CONSOLE_RING_FRAMES : 0);
   return true;
 }
 
@@ -191,6 +239,10 @@ bool start(int initial_stereo) {
   g_stereo = (initial_stereo != 0);
   pokey_glue_set_stereo(g_stereo ? 1 : 0);
   pokey_fast_reset();
+  portENTER_CRITICAL(&g_audio_mux);
+  audio_console_speaker_reset();
+  audio_pcm_suppressor_start(&g_suppressor, SAMPLE_RATE * 2);
+  portEXIT_CRITICAL(&g_audio_mux);
   g_pokey_ok = true;
 
   g_task_running = true;
@@ -223,7 +275,20 @@ void set_stereo(bool stereo) {
   if (stereo == g_stereo) return;
   pokey_glue_set_stereo(stereo ? 1 : 0);
   pokey_fast_reset();
+  portENTER_CRITICAL(&g_audio_mux);
+  audio_console_speaker_reset();
+  audio_pcm_suppressor_init(&g_suppressor);
+  portEXIT_CRITICAL(&g_audio_mux);
   g_stereo = stereo;
+}
+
+void suppress_for_ms(uint32_t ms) {
+  uint64_t frames64 = ((uint64_t)SAMPLE_RATE * (uint64_t)ms + 999u) / 1000u;
+  if (frames64 > 0x7fffffffu) frames64 = 0x7fffffffu;
+  portENTER_CRITICAL(&g_audio_mux);
+  audio_console_speaker_reset();
+  audio_pcm_suppressor_start(&g_suppressor, (int)frames64);
+  portEXIT_CRITICAL(&g_audio_mux);
 }
 
 void set_volume_delta(int8_t delta) {
@@ -235,8 +300,11 @@ void set_volume_delta(int8_t delta) {
 }
 
 void pump() {
-  /* The audio task keeps I2S fed continuously. Sound_Update still lands once
-     per emulated frame, but it must not block rendering or keyboard input. */
+  if (!g_pokey_ok) return;
+  portENTER_CRITICAL(&g_audio_mux);
+  audio_console_speaker_frame_end(atari_cpu_clock_now(), atari_ticks_per_frame(),
+                                  SAMPLE_RATE, atari_video_hz());
+  portEXIT_CRITICAL(&g_audio_mux);
 }
 
 } /* namespace audio_out */

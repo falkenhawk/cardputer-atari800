@@ -37,6 +37,9 @@
 #include "pokeysnd.h"
 #include "screen.h"
 
+void audio_console_speaker_write(int level, unsigned int cpu_clock)
+	__attribute__((weak));
+
 /* GTIA Registers ---------------------------------------------------------- */
 
 UBYTE GTIA_M0PL;
@@ -615,7 +618,12 @@ void GTIA_PutByte(UWORD addr, UBYTE byte)
 
 	switch (addr & 0x1f) {
 	case GTIA_OFFSET_CONSOL:
-		GTIA_speaker = !(byte & 0x08);
+		{
+			int speaker = !(byte & 0x08);
+			if (speaker != GTIA_speaker && audio_console_speaker_write != 0)
+				audio_console_speaker_write(speaker, ANTIC_CPU_CLOCK);
+			GTIA_speaker = speaker;
+		}
 #ifdef CONSOLE_SOUND
 		POKEYSND_UpdateConsol(1);
 #endif

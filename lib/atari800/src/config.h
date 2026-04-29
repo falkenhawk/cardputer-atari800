@@ -35,8 +35,13 @@
 #ifndef STEREO_SOUND
 #define STEREO_SOUND 1
 #endif
+/* The firmware uses src/audio/pokey_fast.c for runtime audio. The upstream
+   synchronized renderer is accurate enough to carry console clicks/bells, but
+   it can block Atari800_Frame() on POKEY-heavy games. Keep it disabled for the
+   no-PSRAM Cardputer runtime path. */
 #undef  SERIO_SOUND
 #undef  CONSOLE_SOUND
+#undef  VOL_ONLY_SOUND
 #undef  SYNCHRONIZED_SOUND
 #undef  SOUND_THIN_API
 #undef NETSIO

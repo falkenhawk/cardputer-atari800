@@ -44,8 +44,15 @@ add_test(NAME pokey_glue COMMAND test_pokey_glue)
 add_executable(test_audio_pcm test_audio_pcm.c ../src/audio/audio_pcm.c)
 add_test(NAME audio_pcm COMMAND test_audio_pcm)
 
+add_executable(test_audio_console_speaker test_audio_console_speaker.c ../src/audio/audio_console_speaker.c)
+add_test(NAME audio_console_speaker COMMAND test_audio_console_speaker)
+
 add_executable(test_pokey_fast test_pokey_fast.c ../src/audio/pokey_fast.c)
 add_test(NAME pokey_fast COMMAND test_pokey_fast)
+
+add_executable(test_audio_config test_audio_config.c)
+target_include_directories(test_audio_config PRIVATE ../lib/atari800/src)
+add_test(NAME audio_config COMMAND test_audio_config)
 
 add_executable(test_rom_args test_rom_args.c ../src/roms/rom_args.c)
 add_test(NAME rom_args COMMAND test_rom_args)

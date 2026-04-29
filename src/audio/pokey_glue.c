@@ -11,6 +11,10 @@ extern long         POKEYSND_playback_freq;
 extern int  POKEYSND_Init(unsigned long freq17, int playback_freq,
                           unsigned char num_pokeys, int flags);
 extern void POKEYSND_Process(void* buf, int sndn);
+#ifdef SYNCHRONIZED_SOUND
+extern unsigned char *POKEYSND_process_buffer;
+extern int  POKEYSND_UpdateProcessBuffer(void);
+#endif
 
 /* POKEYSND_FREQ_17_APPROX (pokeysnd.h:63) — even-dividing 1.79 MHz clock. */
 #define FREQ_17_APPROX 1787520UL
@@ -37,6 +41,16 @@ void pokey_glue_fill(int16_t* buf, int frames, int stereo) {
   int samples = frames * (stereo ? 2 : 1);
   POKEYSND_Process(buf, samples);
 }
+
+#ifdef SYNCHRONIZED_SOUND
+int pokey_glue_drain_sync(int16_t** samples_out) {
+  if (samples_out) *samples_out = 0;
+  int samples = POKEYSND_UpdateProcessBuffer();
+  if (samples <= 0 || !POKEYSND_process_buffer) return 0;
+  if (samples_out) *samples_out = (int16_t*)POKEYSND_process_buffer;
+  return samples;
+}
+#endif
 
 void pokey_glue_set_stereo(int stereo) {
   POKEYSND_stereo_enabled = stereo ? 1 : 0;

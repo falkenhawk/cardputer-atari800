@@ -27,6 +27,13 @@ int pokey_glue_init(int playback_freq, int stereo);
    (L R L R ... for stereo). */
 void pokey_glue_fill(int16_t* buf, int frames, int stereo);
 
+#ifdef SYNCHRONIZED_SOUND
+/* Drain the synchronized POKEYSND process buffer. Unavailable in the fast
+   Cardputer runtime path because synchronized generation blocks the emulator
+   on POKEY-heavy games. */
+int pokey_glue_drain_sync(int16_t** samples_out);
+#endif
+
 /* Reset the stereo bit WITHOUT re-initialising — cheap path for the
    menu toggle. Re-Init is the safe one if you need a full reset. */
 void pokey_glue_set_stereo(int stereo);

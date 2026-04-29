@@ -13,6 +13,7 @@
 #include "display/renderer.h"
 #include "display/screenshot.h"
 #include "input/input_port.h"
+#include "ui/rom_browser.h"
 #include "roms/rom_args.h"
 
 extern "C" {
@@ -34,8 +35,6 @@ extern "C" void ensure_under_buffers_allocated(void);
 extern "C" void* debug_get_under_atarixl_os(void);
 extern "C" void* debug_get_under_cart809F(void);
 extern "C" void* debug_get_under_cartA0BF(void);
-extern "C" int BINLOAD_Loader(const char* filename);
-
 /* atari800 core reset entry points (for Fn+4 / Fn+5 via action handler).
    Declared here rather than via atari.h to keep main.cpp's include set
    tight — atari.h pulls in a wide transitive graph. */
@@ -64,10 +63,6 @@ static const char* mode_name(renderer::Mode m) {
   }
   return "?";
 }
-
-/* Forward decl — try_load_xex is defined below (its SD/BINLOAD_Loader body
-   references SD/SPI globals that are set up later in this file). */
-static bool try_load_xex(const char* path);
 
 /* Fn-layer firmware action handler. Registered with input_port at setup();
    called from within input_port::poll() when a Fn+<key> chord resolves to a
@@ -100,6 +95,7 @@ static void on_input_action(km_action_t act) {
       break;
     case KM_ACT_COLD_RESET:
       Serial.println("action: cold reset");
+      audio_out::suppress_for_ms(2000);
       Atari800_Coldstart();
       break;
     case KM_ACT_BREAK:
@@ -114,11 +110,12 @@ static void on_input_action(km_action_t act) {
       break;
 
     case KM_ACT_LOAD_XEX:
-      /* Re-entry-safe: BINLOAD_Loader internally calls Atari800_Coldstart()
-         on success. try_load_xex logs failure. Same path as original M2 boot
-         hook; just triggered by user keystroke instead of happening at setup. */
-      Serial.println("action: load /atari800/test.xex");
-      try_load_xex("/atari800/test.xex");
+      /* Fn+L opens the ROM browser. Loader dispatch (xex/atr/car/cas/...)
+         goes through atari800's AFILE_OpenFile, which magic-byte-detects
+         the format. Browser walks up from /sd/atari800/roms to deepest
+         existing dir on first open and remembers last dir until reboot. */
+      Serial.println("action: open ROM browser");
+      rom_browser::open();
       break;
 
     case KM_ACT_SCREENSHOT:
@@ -180,15 +177,49 @@ static const char* select_rom_path(const char* sd_upper, const char* vfs_upper,
 }
 
 static bool mount_sd() {
-  // Absolute-minimum mount per M5Stack's official example. Previous attempts
-  // at "defensive cleanup" (esp_vfs_unregister, ff_diskio_register(NULL),
-  // periph_module_reset) all made the mount WORSE by leaving the VFS
-  // subsystem in a partially-initialized state that esp_vfs_fat_register
-  // then rejects with ESP_ERR_INVALID_STATE. The minimum works on cold boot;
-  // if M5Launcher handoff breaks it, that's a separate known limitation.
+  // Absolute-minimum mount per M5Stack's official example.
+  // Diagnostic logging added to find why SD started failing — we want to
+  // see the DMA-capable heap state, timing of SPI.begin/SD.begin, and
+  // whether a retry pattern recovers.
+  multi_heap_info_t hi_dma;
+  heap_caps_get_info(&hi_dma, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  Serial.printf("SD: pre-mount heap DMA|INT|8: free=%u largest=%u min_free=%u\n",
+                (unsigned)hi_dma.total_free_bytes,
+                (unsigned)hi_dma.largest_free_block,
+                (unsigned)hi_dma.minimum_free_bytes);
+
+  uint32_t t0 = millis();
   SPI.begin(SD_PIN_SCK, SD_PIN_MISO, SD_PIN_MOSI, SD_PIN_CS);
-  if (!SD.begin(SD_PIN_CS, SPI, 25000000, "/sd", SD_MAX_OPEN_FILES)) {
-    Serial.println("SD: mount failed (no card? wrong format? first boot after Launcher handoff?)");
+  uint32_t t1 = millis();
+  Serial.printf("SD: SPI.begin took %lums\n", (unsigned long)(t1 - t0));
+
+  bool ok = SD.begin(SD_PIN_CS, SPI, 25000000, "/sd", SD_MAX_OPEN_FILES);
+  uint32_t t2 = millis();
+  Serial.printf("SD: SD.begin returned %d after %lums\n", ok ? 1 : 0,
+                (unsigned long)(t2 - t1));
+
+  if (!ok) {
+    Serial.println("SD: trying SD.end() + retry...");
+    SD.end();
+    delay(50);
+    ok = SD.begin(SD_PIN_CS, SPI, 25000000, "/sd", SD_MAX_OPEN_FILES);
+    uint32_t t3 = millis();
+    Serial.printf("SD: retry returned %d after %lums\n", ok ? 1 : 0,
+                  (unsigned long)(t3 - t2));
+  }
+
+  if (!ok) {
+    Serial.println("SD: trying lower clock 4MHz...");
+    SD.end();
+    delay(50);
+    ok = SD.begin(SD_PIN_CS, SPI, 4000000, "/sd", SD_MAX_OPEN_FILES);
+    uint32_t t4 = millis();
+    Serial.printf("SD: 4MHz retry returned %d after %lums\n", ok ? 1 : 0,
+                  (unsigned long)(t4 - t2));
+  }
+
+  if (!ok) {
+    Serial.println("SD: mount failed after retries");
     return false;
   }
   uint64_t size_mb = SD.cardSize() / (1024 * 1024);
@@ -213,42 +244,13 @@ static void list_sd_root() {
   root.close();
 }
 
-// M2 .xex loader — delegates to atari800 core's BINLOAD_Loader, which uses
-// stdio fopen() (routed through ESP-IDF VFS to the SD mount at /sd) and
-// intercepts the SIO boot-sector read to inject a fake boot sector that
-// drives proper xex segment loading + RUNAD/INITAD handling. This is what
-// the desktop atari800 does when you pass a .xex on the command line.
-//
-// The earlier manual approach (poke into MEMORY_mem then Atari800_Coldstart)
-// didn't work because Coldstart resets RAM *after* our pokes.
-static bool try_load_xex(const char* path) {
-  if (!sd_mounted) {
-    Serial.printf("xex: SD not mounted, skipping %s\n", path);
-    return false;
-  }
-
-  // Translate SD-relative path to a VFS absolute path under /sd.
-  char vfs_path[128];
-  if (path[0] == '/') snprintf(vfs_path, sizeof vfs_path, "/sd%s", path);
-  else                snprintf(vfs_path, sizeof vfs_path, "/sd/%s", path);
-
-  Serial.printf("xex: BINLOAD_Loader(\"%s\")\n", vfs_path);
-  int ok = BINLOAD_Loader(vfs_path);
-  Serial.printf("xex: BINLOAD_Loader returned %d\n", ok);
-  if (ok) {
-    mode_autodetect_for(path);   /* .xex -> MODE_JOYSTICK */
-    Serial.printf("input: mode = %s\n",
-                  mode_current() == MODE_JOYSTICK ? "joystick" : "keyboard");
-  }
-  return ok;
-}
 
 void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println();
   Serial.println("cardputer-atari800 — boot");
-  Serial.println("FW_VER=v0.3-m3-t10ax");
+  Serial.println("FW_VER=v0.3-m3-t10ba-good");
 
   // ---- Heap diagnostics BEFORE any big allocations ----
   size_t free0  = ESP.getFreeHeap();
@@ -352,7 +354,7 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.3-m3-t10ax");
+  d.print("v0.3-m3-t10ba-good");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");
@@ -436,21 +438,17 @@ void setup() {
 void loop() {
   M5Cardputer.update();
 
-  // Keep the T5 keyboard debug serial output — useful for M2 diagnostics
-  // and harmless. M3 routes these to the Atari core properly.
-  if (M5Cardputer.Keyboard.isChange()) {
-    auto status = M5Cardputer.Keyboard.keysState();
-    Serial.print("keys:");
-    if (status.ctrl)  Serial.print(" CTRL");
-    if (status.shift) Serial.print(" SHIFT");
-    if (status.alt)   Serial.print(" ALT");
-    if (status.fn)    Serial.print(" FN");
-    if (status.opt)   Serial.print(" OPT");
-    for (auto c : status.word)     Serial.printf(" '%c'(0x%02x)", c, c);
-    for (auto k : status.hid_keys) Serial.printf(" hid=0x%02x", k);
-    Serial.println();
-    // Fn+<action-key> dispatch now flows through input_port::poll() →
-    // on_input_action(); the inline handler that used to live here is gone.
+  // (Removed the M2 keyboard debug print: M5Cardputer.Keyboard.isChange()
+  // is consumed-on-read [Keyboard.cpp:66 mutates _last_key_size], so any
+  // caller after it sees false and misses the keystroke. Real keyboard
+  // routing goes through input_port::poll() reading keysState() directly,
+  // and rom_browser::poll() does the same — neither needs isChange().)
+
+  // ROM browser overlay — owns screen + keyboard while open. Atari core
+  // stepping suspends so user input doesn't leak into the emulated machine.
+  if (rom_browser::is_open()) {
+    rom_browser::poll();
+    return;
   }
 
   // Frame loop — run atari800 at ~50 Hz (PAL) and present.
@@ -460,6 +458,11 @@ void loop() {
   if (now - last_frame_ms >= 20) {
     last_frame_ms = now;
     input_port::poll();          // snapshot keyboard before stepping the core
+    /* If the input action just opened the ROM browser, skip the rest of
+       this frame — otherwise Atari800_Frame() + renderer::present()
+       would clobber the browser screen we just drew. Subsequent loop
+       iterations short-circuit at the top via the is_open() check. */
+    if (rom_browser::is_open()) return;
     if (frame_count < 3) {
       Serial.printf("frame %d begin\n", frame_count);
       dump_shadow_ptrs("pre-frame");

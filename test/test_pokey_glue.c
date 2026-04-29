@@ -15,6 +15,9 @@ int  POKEYSND_stereo_enabled   = 0;
 unsigned char POKEYSND_num_pokeys = 1;
 int  POKEYSND_snd_flags        = 0;
 long POKEYSND_playback_freq    = 44100;
+#ifdef SYNCHRONIZED_SOUND
+unsigned char *POKEYSND_process_buffer = NULL;
+#endif
 
 static int mock_init_called_with_freq = 0;
 static int mock_init_called_with_num_pokeys = 0;
@@ -37,6 +40,13 @@ void POKEYSND_Process(void* buf, int sndn) {
   (void)buf;
   process_total_samples += sndn;
 }
+
+#ifdef SYNCHRONIZED_SOUND
+static int mock_sync_samples = 0;
+int POKEYSND_UpdateProcessBuffer(void) {
+  return mock_sync_samples;
+}
+#endif
 
 /* ---- Tests ---- */
 static int fail = 0;
@@ -71,6 +81,17 @@ int main(void) {
   process_total_samples = 0;
   pokey_glue_fill(buf, 441, 0);
   CHECK(process_total_samples == 441, "mono 441 frames -> 441 samples");
+
+#ifdef SYNCHRONIZED_SOUND
+  int16_t sync_buf[4] = {1, 2, 3, 4};
+  int16_t* drained = NULL;
+  POKEYSND_process_buffer = (unsigned char*)sync_buf;
+  mock_sync_samples = 4;
+  CHECK(pokey_glue_drain_sync(&drained) == 4,
+        "sync drain returns POKEYSND sample count");
+  CHECK(drained == sync_buf,
+        "sync drain exposes POKEYSND process buffer");
+#endif
 
   if (fail) return EXIT_FAILURE;
   printf("PASS: pokey_glue\n");
