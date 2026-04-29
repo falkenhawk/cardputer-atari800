@@ -250,7 +250,7 @@ void setup() {
   delay(500);
   Serial.println();
   Serial.println("cardputer-atari800 — boot");
-  Serial.println("FW_VER=v0.3-m3-t10ba-good");
+  Serial.println("FW_VER=v0.3-m3-t10bc-browser");
 
   // ---- Heap diagnostics BEFORE any big allocations ----
   size_t free0  = ESP.getFreeHeap();
@@ -326,6 +326,15 @@ void setup() {
                 (unsigned)ESP.getMaxAllocHeap(),
                 sd_mounted ? 1 : 0);
 
+  if (sd_mounted) {
+    if (!rom_browser::preallocate_storage()) {
+      Serial.println("rom_browser: preallocate_storage FAILED");
+    }
+    Serial.printf("heap@post-browser-prealloc: free=%u largest=%u\n",
+                  (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap());
+  }
+
   // Audio pre-alloc AFTER SD mount. t10e-diag confirmed SD mount works when
   // this call is SKIPPED; t10f re-enables it to see if the malloc path
   // affects anything in-flight.
@@ -354,7 +363,7 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.3-m3-t10ba-good");
+  d.print("v0.3-m3-t10bc-browser");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");

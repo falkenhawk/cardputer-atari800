@@ -9,13 +9,17 @@
 #include <Arduino.h>
 #include <M5Cardputer.h>
 #include <SD.h>
+#include <dirent.h>
+#include <esp_heap_caps.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
 
 #include "../audio/audio_out.h"
+#include "rom_browser_model.h"
 
 extern "C" {
 #include "../input/mode.h"
@@ -28,29 +32,14 @@ namespace rom_browser {
 
 namespace {
 
-/* String-pool layout: Entry stores a 16-bit offset into shared g_name_buf
-   instead of inline name[64]. Per-entry shrinks from ~68 B to 4 B.
-   See CLAUDE.md "memory-management pattern" for the contiguous-heap chain.
-
-   On cap selection — empirically, raising cap above 256 with a string
-   pool sized for 1024 entries still triggers SD-mount failure even
-   though total BSS is unchanged. Root cause is BSS *placement* fragmenting
-   the heap differently than the inline-name layout — splitting storage
-   into two static blocks (struct array + name pool) shifts where heap
-   gaps land, and SD's FATFS init can no longer find enough small chunks.
-   Until lazy enumeration replaces full-load (allowing zero-pool design),
-   keep the cap conservative. */
-/* Empirical browser-BSS budget: each KB of static BSS here costs ~1 KB
-   of DMA-capable contiguous heap at post-under-alloc time, and SD's
-   esp_vfs_fat_register needs the largest DMA-cap chunk to be ≥ ~10 KB
-   to mount. Verified by t10l shrunk-test (2.3 KB BSS → 16 KB largest →
-   SD OK) vs t10j (9 KB BSS → 9.7 KB largest → SD fails ESP_ERR_NO_MEM).
-   Budget: ~6 KB BSS. Sized 256 entries × 4 B struct = 1 KB + 4 KB name
-   pool = 5 KB total — leaves 1 KB safety margin.
-   Average name budget: 4096 / 256 = 16 chars per name. Typical ROM
-   names (Lasermania.atr=14, atari_basic.rom=15, doom.bin=8) fit. */
-constexpr int      MAX_ENTRIES             = 256;
-constexpr int      NAME_BUF_SIZE           = 4096;
+/* Browser storage is heap-backed, not static BSS. Static BSS proved too
+   fragile: moving a 4-8 KB name pool around could break SD mount by changing
+   heap layout before FATFS init. main.cpp calls preallocate_storage() after
+   SD mount and before audio prealloc; open() retries lazily as a fallback. */
+constexpr int      PRIMARY_MAX_ENTRIES     = 512;
+constexpr size_t   PRIMARY_NAME_BUF_SIZE   = 8192;
+constexpr int      FALLBACK_MAX_ENTRIES    = 256;
+constexpr size_t   FALLBACK_NAME_BUF_SIZE  = 4096;
 /* Loading indicator only appears for slow enumerations. Fast dir
    switches (a few hundred ms) stay flicker-free — the user sees the
    previous list until the new one is ready. Past LOAD_INDICATOR_DELAY,
@@ -63,7 +52,7 @@ constexpr int      LOAD_PROGRESS_STEP      = 50;
    enough that you can stop on a target. */
 constexpr uint32_t REPEAT_INITIAL_MS  = 400;
 constexpr uint32_t REPEAT_INTERVAL_MS = 100;
-constexpr int   ENTRY_NAME_MAX      = 64;
+constexpr int   ENTRY_NAME_MAX      = ROM_BROWSER_ENTRY_NAME_MAX;
 constexpr int   PATH_MAX_BUF  = 192;
 
 /* Layout (240 × 135 LCD at default font, 6×8 px):
@@ -75,15 +64,6 @@ constexpr int   HEADER_Y      = 2;
 constexpr int   LIST_Y0       = HEADER_Y + ROW_H + 2;
 constexpr int   VISIBLE_ROWS  = 9;
 constexpr int   STATUS_Y      = LIST_Y0 + VISIBLE_ROWS * ROW_H + 2;
-
-/* String-pool entry: name lives in g_name_buf[name_offset..]. The
-   name_offset uses uint16_t which limits the pool to 64 KB; we use
-   24 KB so that's safe. The struct is 4 B (uint16 + bool + 1 byte
-   padding) → 1024 entries fit in 4 KB BSS. */
-struct Entry {
-  uint16_t name_offset;
-  bool     is_dir;
-};
 
 bool g_open    = false;
 bool g_dirty   = true;        /* needs redraw */
@@ -100,21 +80,22 @@ char g_dir[PATH_MAX_BUF]  = "/atari800/roms";     /* SD-relative current dir */
 char g_last_dir[PATH_MAX_BUF] = "";               /* persists across opens */
 char g_status[ENTRY_NAME_MAX] = "";               /* one-line status (errors) */
 
-Entry  g_entries[MAX_ENTRIES];
-char   g_name_buf[NAME_BUF_SIZE];
-size_t g_name_buf_used = 0;
-int    g_count    = 0;
+rom_browser_entry_t* g_entries = nullptr;
+char* g_name_buf = nullptr;
+int g_entry_capacity = 0;
+size_t g_name_capacity = 0;
+rom_browser_store_t g_store;
 int    g_cursor   = 0;
 
 /* Look up an entry's filename through the string pool. */
 inline const char* entry_name(int idx) {
-  return g_name_buf + g_entries[idx].name_offset;
+  return rom_browser_store_name(&g_store, idx);
 }
-inline const char* entry_name(const Entry& e) {
+inline const char* entry_name(const rom_browser_entry_t& e) {
   return g_name_buf + e.name_offset;
 }
 
-/* Set whenever the *contents* (g_count, g_dir, status text, truncation
+/* Set whenever the *contents* (g_store.count, g_dir, status text, truncation
    flag) change such that header/footer/list-area all need a fresh draw.
    A bare cursor-only move leaves this false, enabling the 2-row swap. */
 bool g_force_full = true;
@@ -136,8 +117,41 @@ uint32_t g_search_last_ms = 0;
 bool search_active(uint32_t now);
 int   g_scroll   = 0;
 bool  g_truncated = false;
+rom_browser_key_gate_t g_open_key_gate = {};
 
 /* ---------- path helpers ---------- */
+
+bool allocate_storage(int max_entries, size_t name_capacity) {
+  rom_browser_entry_t* entries =
+      (rom_browser_entry_t*)heap_caps_malloc((size_t)max_entries * sizeof(rom_browser_entry_t),
+                                             MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  char* names = (char*)heap_caps_malloc(name_capacity,
+                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (!entries || !names) {
+    if (entries) heap_caps_free(entries);
+    if (names) heap_caps_free(names);
+    return false;
+  }
+
+  g_entries = entries;
+  g_name_buf = names;
+  g_entry_capacity = max_entries;
+  g_name_capacity = name_capacity;
+  rom_browser_store_init(&g_store, g_entries, g_entry_capacity,
+                         g_name_buf, g_name_capacity);
+  Serial.printf("rom_browser: storage entries=%d names=%u bytes\n",
+                g_entry_capacity, (unsigned)g_name_capacity);
+  return true;
+}
+
+bool ensure_storage() {
+  if (g_entries && g_name_buf) return true;
+  if (allocate_storage(PRIMARY_MAX_ENTRIES, PRIMARY_NAME_BUF_SIZE)) return true;
+  Serial.println("rom_browser: primary storage alloc failed, trying fallback");
+  if (allocate_storage(FALLBACK_MAX_ENTRIES, FALLBACK_NAME_BUF_SIZE)) return true;
+  Serial.println("rom_browser: storage alloc failed");
+  return false;
+}
 
 bool dir_exists(const char* path) {
   File f = SD.open(path);
@@ -175,6 +189,13 @@ void resolve_initial_dir(char* out, const char* preferred) {
   }
 }
 
+bool make_vfs_dir_path(const char* sd_relative, char* out, size_t out_size) {
+  int n = (strcmp(sd_relative, "/") == 0)
+            ? snprintf(out, out_size, "/sd")
+            : snprintf(out, out_size, "/sd%s", sd_relative);
+  return n >= 0 && n < (int)out_size;
+}
+
 /* ---------- extension filter ---------- */
 
 bool ends_with_ci(const char* s, const char* suffix) {
@@ -202,16 +223,6 @@ bool is_supported_file(const char* name) {
 }
 
 /* ---------- enumeration ---------- */
-
-int compare_entries(const void* a, const void* b) {
-  const Entry* ea = (const Entry*)a;
-  const Entry* eb = (const Entry*)b;
-  if (ea->is_dir != eb->is_dir) return ea->is_dir ? -1 : 1;
-  /* qsort swaps Entry structs, but the name pool is never moved,
-     so the offsets remain valid before and after swaps. */
-  return strcasecmp(g_name_buf + ea->name_offset,
-                    g_name_buf + eb->name_offset);
-}
 
 /* Paint the browser shell (header + path + separator) plus a centered
    "loading…" overlay. Used when enumeration runs past the indicator
@@ -244,91 +255,181 @@ void paint_load_progress(int count) {
   d.printf("loading %d...", count);
 }
 
-void load_entries() {
-  g_count = 0;
-  g_truncated = false;
-  g_cursor = 0;
-  g_scroll = 0;
-  g_name_buf_used = 0;   /* implicit "free" of all previous names */
-  g_force_full = true;
+bool load_cancel_requested(int scanned) {
+  if ((scanned & 0x0F) != 0) return false;
+  M5Cardputer.update();
+  const auto& status = M5Cardputer.Keyboard.keysState();
+  if (!status.hid_keys.empty() && status.hid_keys[0] == 0x29) return true;
+  if (!status.word.empty() && status.word[0] == 27) return true;
+  return false;
+}
 
-  File root = SD.open(g_dir);
-  if (!root || !root.isDirectory()) {
-    snprintf(g_status, sizeof(g_status), "open failed: %s", g_dir);
-    if (root) root.close();
-    return;
+void maybe_paint_loading(uint32_t load_start_ms, bool* indicator_shown) {
+  uint32_t now = millis();
+  if (!*indicator_shown && (now - load_start_ms) >= LOAD_INDICATOR_DELAY_MS) {
+    paint_loading_shell();
+    paint_load_progress(g_store.count);
+    *indicator_shown = true;
+  }
+}
+
+bool accept_leaf(const char* leaf, bool is_dir) {
+  if (!leaf || leaf[0] == '\0') return true;
+  if (leaf[0] == '.' || leaf[0] == '_') return true;
+  if (!is_dir && !is_supported_file(leaf)) return true;
+
+  rom_browser_add_result_t rc =
+      rom_browser_store_add(&g_store, leaf, is_dir ? 1 : 0);
+  return rc == ROM_BROWSER_ADD_OK;
+}
+
+bool stat_entry_is_dir(const char* vfs_dir, const char* leaf) {
+  char full[PATH_MAX_BUF + ENTRY_NAME_MAX + 8];
+  int n = snprintf(full, sizeof(full), "%s/%s", vfs_dir, leaf);
+  if (n < 0 || n >= (int)sizeof(full)) return false;
+
+  struct stat st;
+  if (stat(full, &st) != 0) return false;
+  return S_ISDIR(st.st_mode);
+}
+
+bool dirent_entry_is_dir(const char* vfs_dir, const struct dirent* de) {
+#ifdef DT_DIR
+  if (de->d_type == DT_DIR) return true;
+#endif
+#ifdef DT_REG
+  if (de->d_type == DT_REG) return false;
+#endif
+  return stat_entry_is_dir(vfs_dir, de->d_name);
+}
+
+bool load_entries_dirent(uint32_t load_start_ms, bool* indicator_shown,
+                         bool* canceled) {
+  char vfs_dir[PATH_MAX_BUF + 4];
+  if (!make_vfs_dir_path(g_dir, vfs_dir, sizeof(vfs_dir))) return false;
+
+  DIR* dir = opendir(vfs_dir);
+  if (!dir) return false;
+
+  int scanned = 0;
+  struct dirent* de;
+  while ((de = readdir(dir)) != nullptr) {
+    scanned++;
+    maybe_paint_loading(load_start_ms, indicator_shown);
+
+    const char* leaf = de->d_name;
+    if (strcmp(leaf, ".") == 0 || strcmp(leaf, "..") == 0) continue;
+    bool is_dir = dirent_entry_is_dir(vfs_dir, de);
+    int before_count = g_store.count;
+    if (!accept_leaf(leaf, is_dir)) break;
+
+    if (g_store.count != before_count &&
+        *indicator_shown && (g_store.count % LOAD_PROGRESS_STEP) == 0) {
+      paint_load_progress(g_store.count);
+    }
+    if (load_cancel_requested(scanned)) {
+      *canceled = true;
+      break;
+    }
   }
 
-  uint32_t load_start_ms = millis();
-  bool indicator_shown = false;
+  closedir(dir);
+  return true;
+}
 
-  while (g_count < MAX_ENTRIES) {
-    /* Arm the indicator on the first iteration past the threshold.
-       Checked at the loop top so empty/fast dirs never paint it. */
-    uint32_t now = millis();
-    if (!indicator_shown && (now - load_start_ms) >= LOAD_INDICATOR_DELAY_MS) {
-      paint_loading_shell();
-      paint_load_progress(g_count);
-      indicator_shown = true;
-    }
+bool load_entries_arduino(uint32_t load_start_ms, bool* indicator_shown,
+                          bool* canceled) {
+  File root = SD.open(g_dir);
+  if (!root || !root.isDirectory()) {
+    if (root) root.close();
+    return false;
+  }
+
+  int scanned = 0;
+  while (g_store.count < g_store.max_entries) {
+    maybe_paint_loading(load_start_ms, indicator_shown);
 
     File f = root.openNextFile();
     if (!f) break;
+    scanned++;
 
-    /* Arduino SD's f.name() returns a leaf name on ESP32 (no leading slash);
-       skip dotfiles and macOS metadata cruft. */
     const char* leaf = f.name();
-    /* Some ESP32 SD versions still prefix with the dir path — strip it. */
     const char* slash = strrchr(leaf, '/');
     if (slash) leaf = slash + 1;
 
-    if (leaf[0] == '.' || leaf[0] == '_') {
-      f.close();
-      continue;
-    }
-
     bool is_dir = f.isDirectory();
-    if (!is_dir && !is_supported_file(leaf)) {
-      f.close();
-      continue;
-    }
-
-    /* Append leaf + null to the name pool. If the pool would overflow,
-       stop loading (truncate) — caller sees the same g_truncated flag
-       it would for a count-cap hit, and the existing UX surfaces it. */
-    size_t leaf_len = strlen(leaf);
-    if (leaf_len > ENTRY_NAME_MAX - 1) leaf_len = ENTRY_NAME_MAX - 1;
-    if (g_name_buf_used + leaf_len + 1 > NAME_BUF_SIZE) {
-      g_truncated = true;
-      f.close();
-      break;
-    }
-    Entry& e = g_entries[g_count++];
-    e.name_offset = (uint16_t)g_name_buf_used;
-    e.is_dir = is_dir;
-    memcpy(g_name_buf + g_name_buf_used, leaf, leaf_len);
-    g_name_buf[g_name_buf_used + leaf_len] = '\0';
-    g_name_buf_used += leaf_len + 1;
+    int before_count = g_store.count;
+    bool accepted = accept_leaf(leaf, is_dir);
     f.close();
+    if (!accepted) break;
 
-    if (indicator_shown && (g_count % LOAD_PROGRESS_STEP) == 0) {
-      paint_load_progress(g_count);
+    if (g_store.count != before_count &&
+        *indicator_shown && (g_store.count % LOAD_PROGRESS_STEP) == 0) {
+      paint_load_progress(g_store.count);
+    }
+    if (load_cancel_requested(scanned)) {
+      *canceled = true;
+      break;
     }
   }
 
-  /* Detect truncation: peek one more. */
-  if (g_count == MAX_ENTRIES) {
-    File f = root.openNextFile();
-    if (f) {
-      g_truncated = true;
+  if (!*canceled && g_store.count == g_store.max_entries) {
+    while (File f = root.openNextFile()) {
+      const char* leaf = f.name();
+      const char* slash = strrchr(leaf, '/');
+      if (slash) leaf = slash + 1;
+
+      bool displayable = leaf && leaf[0] != '\0' &&
+                         leaf[0] != '.' && leaf[0] != '_' &&
+                         (f.isDirectory() || is_supported_file(leaf));
       f.close();
+      if (displayable) {
+        g_store.truncated = 1;
+        break;
+      }
     }
   }
   root.close();
+  return true;
+}
 
-  qsort(g_entries, g_count, sizeof(Entry), compare_entries);
-  Serial.printf("rom_browser: %d entries%s\n",
-                g_count, g_truncated ? " (truncated)" : "");
+void load_entries() {
+  if (!ensure_storage()) {
+    snprintf(g_status, sizeof(g_status), "browser alloc failed");
+    return;
+  }
+
+  rom_browser_store_init(&g_store, g_entries, g_entry_capacity,
+                         g_name_buf, g_name_capacity);
+  g_truncated = false;
+  g_cursor = 0;
+  g_scroll = 0;
+  g_force_full = true;
+
+  uint32_t load_start_ms = millis();
+  bool indicator_shown = false;
+  bool canceled = false;
+  bool loaded = load_entries_dirent(load_start_ms, &indicator_shown, &canceled);
+  const char* backend = "dirent";
+  if (!loaded) {
+    backend = "arduino";
+    loaded = load_entries_arduino(load_start_ms, &indicator_shown, &canceled);
+  }
+
+  if (!loaded) {
+    snprintf(g_status, sizeof(g_status), "open failed: %s", g_dir);
+    return;
+  }
+  if (canceled) {
+    snprintf(g_status, sizeof(g_status), "load canceled");
+  }
+
+  g_truncated = g_store.truncated != 0;
+  rom_browser_store_sort(&g_store);
+  Serial.printf("rom_browser: %d/%d entries%s in %lums via %s\n",
+                g_store.count, g_store.max_entries,
+                g_truncated ? " (truncated)" : "",
+                (unsigned long)(millis() - load_start_ms), backend);
 }
 
 /* ---------- rendering ----------
@@ -361,6 +462,19 @@ int row_of_idx(int idx) {
   return row;
 }
 
+void print_ellipsized(const char* s, int max_chars) {
+  int len = (int)strlen(s);
+  if (len <= max_chars) {
+    M5Cardputer.Display.print(s);
+    return;
+  }
+  int prefix_chars = max_chars - 3;
+  for (int i = 0; i < prefix_chars; i++) {
+    M5Cardputer.Display.print(s[i]);
+  }
+  M5Cardputer.Display.print("...");
+}
+
 void draw_row(int row, int idx, bool selected) {
   auto& d = M5Cardputer.Display;
   int y = LIST_Y0 + row * ROW_H;
@@ -372,15 +486,15 @@ void draw_row(int row, int idx, bool selected) {
     d.setTextColor(fg, bg);
     d.setCursor(2, y);
     d.print(" .. ");
-  } else if (idx >= 0 && idx < g_count) {
-    const Entry& e = g_entries[idx];
+  } else if (idx >= 0 && idx < g_store.count) {
+    const rom_browser_entry_t& e = g_entries[idx];
     fg = selected ? TFT_BLACK : (e.is_dir ? TFT_CYAN : TFT_WHITE);
     bg = selected ? TFT_WHITE : TFT_BLACK;
     d.fillRect(0, y - 1, 240, ROW_H, bg);
     d.setTextColor(fg, bg);
     d.setCursor(2, y);
     d.print(e.is_dir ? "/" : " ");
-    d.print(entry_name(e));
+    print_ellipsized(entry_name(e), 38);
   } else {
     d.fillRect(0, y - 1, 240, ROW_H, TFT_BLACK);
   }
@@ -395,7 +509,7 @@ void draw_list_area() {
   }
   for (; row < VISIBLE_ROWS; row++) {
     int idx = g_scroll + (row - (show_parent && g_scroll == 0 ? 1 : 0));
-    draw_row(row, idx, idx == g_cursor && idx >= 0 && idx < g_count);
+    draw_row(row, idx, idx == g_cursor && idx >= 0 && idx < g_store.count);
   }
 }
 
@@ -434,11 +548,8 @@ void draw_full() {
        LGFX/TFT_eSPI's default 6×8 font). If they ever render as
        boxes on this hardware we'll switch to UTF-8 ↑↓←→. */
     d.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    d.print("\x18\x19 line  \x1B\x1A page  []hm/end \\up Ent Esc");
-    if (g_truncated) {
-      d.setTextColor(TFT_YELLOW, TFT_BLACK);
-      d.print(" *");
-    }
+    d.printf("%d%s  \x18\x19 line \x1B\x1A page \\up Ent Esc",
+             g_store.count, g_truncated ? "*" : "");
   }
   g_dirty = false;
   g_force_full = false;
@@ -464,7 +575,7 @@ void draw_cursor_change(int prev, int curr) {
 void set_cursor(int target) {
   bool show_parent = (strcmp(g_dir, "/") != 0);
   int min_cursor = show_parent ? -1 : 0;
-  int max_cursor = g_count - 1;
+  int max_cursor = g_store.count - 1;
   if (max_cursor < min_cursor) max_cursor = min_cursor;  /* empty dir edge */
   if (target < min_cursor) target = min_cursor;
   if (target > max_cursor) target = max_cursor;
@@ -482,19 +593,38 @@ void set_cursor(int target) {
     g_scroll = g_cursor - file_rows + 1;
     if (g_scroll < 0) g_scroll = 0;
   }
-  if (g_scroll > g_count - 1) g_scroll = (g_count > 0) ? g_count - 1 : 0;
+  if (g_scroll > g_store.count - 1) {
+    g_scroll = (g_store.count > 0) ? g_store.count - 1 : 0;
+  }
   if (g_scroll < 0) g_scroll = 0;
 }
 
-void cursor_up()        { set_cursor(g_cursor - 1); }
-void cursor_down()      { set_cursor(g_cursor + 1); }
+int min_cursor_for_dir() {
+  return (strcmp(g_dir, "/") != 0) ? -1 : 0;
+}
+
+int max_cursor_for_dir() {
+  int min_cursor = min_cursor_for_dir();
+  int max_cursor = g_store.count - 1;
+  return max_cursor < min_cursor ? min_cursor : max_cursor;
+}
+
+void cursor_up() {
+  set_cursor(rom_browser_cursor_wrap(g_cursor - 1,
+                                     min_cursor_for_dir(), max_cursor_for_dir()));
+}
+
+void cursor_down() {
+  set_cursor(rom_browser_cursor_wrap(g_cursor + 1,
+                                     min_cursor_for_dir(), max_cursor_for_dir()));
+}
 void cursor_pageup()    { set_cursor(g_cursor - (VISIBLE_ROWS - 1)); }
 void cursor_pagedown()  { set_cursor(g_cursor + (VISIBLE_ROWS - 1)); }
 void cursor_home()      {
   bool show_parent = (strcmp(g_dir, "/") != 0);
   set_cursor(show_parent ? -1 : 0);
 }
-void cursor_end()       { set_cursor(g_count - 1); }
+void cursor_end()       { set_cursor(g_store.count - 1); }
 
 void enter_parent() {
   /* Save the leaf we're leaving so we can put the cursor back on it
@@ -513,7 +643,7 @@ void enter_parent() {
 
   /* Find the directory we just left and focus it. */
   if (leaving[0]) {
-    for (int i = 0; i < g_count; i++) {
+    for (int i = 0; i < g_store.count; i++) {
       if (g_entries[i].is_dir && strcasecmp(entry_name(i), leaving) == 0) {
         set_cursor(i);
         break;
@@ -528,9 +658,9 @@ void enter_selection() {
     enter_parent();
     return;
   }
-  if (g_cursor < 0 || g_cursor >= g_count) return;
+  if (g_cursor < 0 || g_cursor >= g_store.count) return;
 
-  const Entry& e = g_entries[g_cursor];
+  const rom_browser_entry_t& e = g_entries[g_cursor];
 
   if (e.is_dir) {
     /* Append "/<name>" to g_dir. Special-case root "/" so we don't end
@@ -619,14 +749,10 @@ void search_append(char c) {
   }
   g_search_last_ms = now;
 
-  /* Find first entry (case-insensitive) whose name starts with buffer.
-     Skip the ".." virtual entry — search is for files/subdirs. */
-  for (int i = 0; i < g_count; i++) {
-    if (strncasecmp(entry_name(i), g_search_buf, g_search_len) == 0) {
-      set_cursor(i);
-      break;
-    }
-  }
+  /* Prefix search first; if that misses, fall back to substring so buried
+     names like "foo_lasermania.atr" can still be found by typing "lase". */
+  int idx = rom_browser_find_prefix_or_substring(&g_store, g_search_buf);
+  if (idx >= 0) set_cursor(idx);
   g_force_full = true;   /* status bar shows "search: <buf>" */
 }
 
@@ -707,12 +833,8 @@ void handle_key(char c, uint8_t hid_key, bool ctrl, bool fn, bool alt) {
         /* Re-find first match for shorter prefix; if buffer became
            empty, leave cursor where it is. */
         if (g_search_len > 0) {
-          for (int i = 0; i < g_count; i++) {
-            if (strncasecmp(entry_name(i), g_search_buf, g_search_len) == 0) {
-              set_cursor(i);
-              break;
-            }
-          }
+          int idx = rom_browser_find_prefix_or_substring(&g_store, g_search_buf);
+          if (idx >= 0) set_cursor(idx);
         }
         g_force_full = true;
       }
@@ -752,10 +874,15 @@ void handle_key(char c, uint8_t hid_key, bool ctrl, bool fn, bool alt) {
 
 /* ---------- public API ---------- */
 
+bool preallocate_storage() {
+  return ensure_storage();
+}
+
 void open() {
   if (g_open) return;
   g_open = true;
   g_status[0] = '\0';
+  rom_browser_key_gate_opened(&g_open_key_gate);
 
   /* Mute audio while browser is up — POKEY state is frozen but the audio
      task keeps running, so any active wave would become a stuck tone. */
@@ -804,6 +931,17 @@ void poll() {
   char c = status.word.empty() ? 0 : status.word[0];
   uint8_t hid = status.hid_keys.empty() ? 0 : status.hid_keys[0];
   uint32_t now = millis();
+
+  if (g_open_key_gate.ignore_until_release) {
+    if (!rom_browser_key_gate_allows(&g_open_key_gate, pressed ? 1 : 0)) {
+      if (!pressed) {
+        held_c = 0;
+        held_hid = 0;
+        next_fire_ms = 0;
+      }
+      return;
+    }
+  }
 
   if (!pressed) {
     held_c = 0;

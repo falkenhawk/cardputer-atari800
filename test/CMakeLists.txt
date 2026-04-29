@@ -54,6 +54,9 @@ add_executable(test_audio_config test_audio_config.c)
 target_include_directories(test_audio_config PRIVATE ../lib/atari800/src)
 add_test(NAME audio_config COMMAND test_audio_config)
 
+add_executable(test_rom_browser_model test_rom_browser_model.c ../src/ui/rom_browser_model.c)
+add_test(NAME rom_browser_model COMMAND test_rom_browser_model)
+
 add_executable(test_rom_args test_rom_args.c ../src/roms/rom_args.c)
 add_test(NAME rom_args COMMAND test_rom_args)
 

@@ -13,6 +13,10 @@
 
 namespace rom_browser {
 
+/* Allocate browser list/name storage after SD is mounted, before audio grabs
+   the remaining heap. open() will retry lazily if this was not called. */
+bool preallocate_storage();
+
 /* Open the browser. Reads SD, draws the list. Idempotent. */
 void open();
 
