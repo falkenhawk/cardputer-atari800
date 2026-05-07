@@ -1,16 +1,16 @@
-# cardputer-atari800 — Milestone 3: Input, Audio, Settings
+# cardputer-atari800 — Milestone 3: Input, Audio, ROM Browser
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** route Cardputer keyboard into the Atari core (full Fn layer + dual-cluster joystick), add POKEY audio via the ES8311 codec, expose PAL/NTSC and machine-model toggles through a minimal in-emulator overlay menu — while preserving M2's tight-heap memory pattern.
+**Goal:** route Cardputer keyboard into the Atari core (full Fn layer + dual-cluster joystick), add POKEY audio via the ES8311 codec, and ship a usable Fn+L ROM browser for SD file loading — while preserving M2's tight-heap memory pattern.
 
 **Architecture:** M3 stays inside M2's three-layer model (app / port / core) and adds two new peer modules plus a settings/menu layer:
 
 - `src/input/` — polls `M5Cardputer.Keyboard`, resolves layer (Default / Fn / Joystick) from modifiers + mode state, and writes core-facing input globals (`INPUT_key_code`, `INPUT_key_consol`, `PIA_PORT_input[0]`, `GTIA_TRIG[0]`, `POKEY_KBCODE`) directly. The vendored core has **no `input.c`** (it was deliberately excluded in M2/T4), so we own the `INPUT_Frame()` / `INPUT_Scanline()` pump implementations in `port_impl.cpp`.
 - `src/audio/` — owns `POKEYSND_Init` + a pair of pre-allocated 16-bit stereo buffers, alternates them via `M5Cardputer.Speaker.playRaw()`. Enables `#define SOUND` in `lib/atari800/src/config.h` so `POKEY_Update` actually calls into `POKEYSND_Update_ptr` instead of the no-op macro shadow.
-- `src/settings/` + `src/ui/` — in-memory settings struct (persistence is M4), plus a text-list overlay menu triggered by Fn+8. Menu items flip region, machine model, display mode, volume/brightness, dual-POKEY, input mode; menu open pauses audio + dims screen.
+- `src/settings/` + `src/ui/` — in-memory settings struct (persistence is M4) plus the M3 browser overlay. A fuller Fn+8 in-emulator menu remains M4 polish.
 
-No save-state code (M5), no file browser (M4), no on-SD config persistence (M4).
+No save-state code (M5) and no on-SD config persistence (M4). The usable ROM browser belongs to M3; M4 can refine browser UX and integrate it with the fuller menu/settings flow.
 
 **Tech Stack:** same as M2 + M5Cardputer's `Speaker_Class` (I²S driver + ES8311 enable callback, M5Unified) + atari800's `pokeysnd.c` (already compiled since M2, just not called because `SOUND` is undef).
 
@@ -1504,15 +1504,14 @@ void poll() {
 } /* namespace input_port */
 ```
 
-- [ ] **Step 3: Auto-detect mode on xex load in `main.cpp`**
+- [ ] **Step 3: Auto-detect mode on successful file load**
 
-In `try_load_xex()` in `src/main.cpp`, after a successful `BINLOAD_Loader` call:
+After any successful loader call, set the input mode from the selected filename:
 
 ```cpp
-  int ok = BINLOAD_Loader(vfs_path);
-  Serial.printf("xex: BINLOAD_Loader returned %d\n", ok);
+  int ok = load_selected_file(vfs_path);
   if (ok) {
-    mode_autodetect_for(path);     /* .xex -> MODE_JOYSTICK */
+    mode_autodetect_for(path);
     Serial.printf("input: mode = %s\n",
                   mode_current() == MODE_JOYSTICK ? "joystick" : "keyboard");
   }
@@ -2568,7 +2567,7 @@ git commit -m "settings: runtime apply helper (audio mute + renderer region + st
 
 ---
 
-### Task 15: Overlay menu — Fn+8 opens a text list
+### Task 15: Overlay menu — M4 follow-up
 
 **Files:**
 - Create: `src/ui/menu.h`
@@ -2579,7 +2578,7 @@ Minimum viable menu per spec §7.3: modal overlay that dims the screen, presents
 
 The menu runs in the main loop as a state machine: `menu_open()` returns immediately; `menu_is_open()` returns true while open; the main loop pauses `Atari800_Frame()` and calls `menu_update()` + `menu_draw()` instead. Audio is muted while open.
 
-Items for M3 (subset of spec §7.3):
+Items for the later full menu:
 
 ```
 ▶ Resume
@@ -2590,7 +2589,7 @@ Items for M3 (subset of spec §7.3):
   Dual POKEY: <on|off>
   ─────────
   Cold reset
-  Exit to browser    (disabled in M3 — M4)
+  Exit to browser
 ```
 
 - [ ] **Step 1: Create `src/ui/menu.h`**
@@ -3096,7 +3095,7 @@ git commit -m "main: splash v0.3-m3 — M3 milestone"
 cmake --build build && ctest --test-dir build --output-on-failure
 ```
 
-Expected: 9/9 pass (sanity, palette, projector, loader, keymap, joystick, mode, pokey_glue, settings).
+Expected: all host tests pass.
 
 - [ ] **Step 3: Fresh-boot hardware acceptance checklist**
 
@@ -3114,13 +3113,10 @@ Flash a clean `cardputer-atari800.m3.bin` to the device. Walk through each item:
 - [ ] `Fn+7` break halts a running `10 GOTO 10` program.
 - [ ] Drop a joystick-driven xex; it auto-loads; `E/S/A/D` move sprite on cluster 1; `; . , /` on cluster 2; `K`/`L`/`Z`/`X` fire.
 - [ ] `Fn+J` toggles to keyboard mode (sprite stops responding), back to joystick.
-- [ ] `Fn+8` opens overlay menu; audio mutes.
-- [ ] In menu: navigate with `;` / `.`; activate with Enter.
-- [ ] Menu "Region: PAL" → Enter → "NTSC"; on close, core reboots to NTSC (confirm via a visibly-different CPU clock/frame-rate — NTSC games go faster).
-- [ ] Menu "Machine: 65XE" → Enter → cycles; picking 130XE and cold-starting into a 128 KB-dependent demo should work differently from 64 KB.
-- [ ] Menu "Dual POKEY: off" → Enter → "on"; stereo audio sources now produce actual L/R split.
-- [ ] `Esc` in menu restores emulator.
-- [ ] `Fn+9` / `Fn+0` show OSD "NO SAVE STATE".
+- [ ] `Fn+L` opens the ROM browser; audio mutes while the browser owns the screen.
+- [ ] Browser directory enumeration is responsive; held navigation repeats without skipping wildly.
+- [ ] Selecting `.xex` / `.atr` / `.car` style files dispatches through atari800's loader path and returns to emulation.
+- [ ] Loading game-oriented extensions selects joystick mode; disk/BASIC-oriented extensions select keyboard mode. `Fn+J` still toggles manually.
 
 Any failure → iterate; do not tag.
 
@@ -3128,21 +3124,17 @@ Any failure → iterate; do not tag.
 
 ```bash
 git status   # expect: clean
-git tag -a v0.3-m3 -m "Milestone 3: input, audio, settings + overlay menu
+git tag -a v0.3-m3 -m "Milestone 3: input, audio, usable ROM browser
 
 - Full Cardputer keyboard wired into atari800 core (default + Fn layers)
 - Dual-cluster joystick (ESAD+KL / ;.,/+ ZX) OR'd into Joystick-1
 - Auto-detect keyboard/joystick mode from file extension; Fn+J manual toggle
-- POKEY audio at 44.1 kHz via ES8311 codec; mono by default, dual-POKEY toggle
-- Volume/brightness Fn bindings; transient OSD feedback in top-right corner
-- Settings: machine (800XL/65XE/130XE/XEGS), region (PAL/NTSC), BASIC boot,
-  dual-POKEY — in-memory only; SD persistence is M4
-- Fn+8 overlay menu mutates settings, cold-starts on close
-- All six display modes / volume / brightness / machine / region switchable
-  at runtime without reflashing
+- Fast POKEY audio via ES8311/raw I2S, with console speaker events for system sounds
+- Volume/brightness/display-mode Fn bindings
+- Fn+L ROM browser for SD file loading, with fast enumeration and atari800 loader dispatch
 
-M4 adds: file browser, ROM-override from SD, atari800.cfg persistence,
-copy-on-write .atr, .atr/.bas/.cas/.car/.rom file loaders."
+M4 adds: browser UX polish, full in-emulator menu, settings persistence,
+and copy-on-write .atr work. M5 adds save/load states."
 ```
 
 ---
@@ -3150,30 +3142,28 @@ copy-on-write .atr, .atr/.bas/.cas/.car/.rom file loaders."
 ## M3 acceptance checklist
 
 - [ ] `pio run -e cardputer-adv` builds clean; flash under 80% of OTA slot
-- [ ] `ctest` passes (all 9 host tests)
+- [ ] `ctest` passes (current baseline: 17 host tests)
 - [ ] Every item in Task 18's hardware checklist is ticked
 - [ ] No heap regression: steady-state free heap ≥ 12 KB (was ~16 KB in M2; we expect ~4-8 KB consumed by audio buffers + Speaker task)
 - [ ] Git tag `v0.3-m3` present
 
 ## What's NOT in M3 (deferred)
 
-- File browser UI (M4)
-- ROM override from SD `/atari800/roms/` (M4)
-- `.atr` / `.bas` / `.cas` / `.car` / `.rom` format loaders (M4 — M3 still only loads `.xex` via M2's hardcoded path)
 - Copy-on-write disk mounts (M4)
 - atari800.cfg / last.json persistence (M4)
 - Save states (M5)
 - Multi-slot save states, quick-resume, auto-resume (M5)
-- "Swap disk" menu item (M4 — placeholder in the menu definition)
+- Full in-emulator settings menu, including "Swap disk" (M4)
+- Browser UX refinements beyond the usable Fn+L baseline (M4)
 - Full 3-way input mode (auto / keyboard / joystick) — M3 simplifies to keyboard/joystick since auto-detect is only triggered on file load
 - Stereo POKEY authoring tools (not planned)
 - IMU tilt-as-joystick (not planned for v1)
 
 ## M4 readiness notes for future-you
 
-- The M3 `g_settings` struct is the ground truth for user preferences. M4's persistence just needs to serialize it to INI and read it back. Reading happens between `Atari800_Initialise()` and `settings_runtime::apply()` in `setup()`.
-- The `try_load_xex` function in `main.cpp` is still hardcoded to `/atari800/test.xex`. M4's file browser replaces the hardcoded path with a user pick; everything else (BINLOAD_Loader, mode_autodetect_for) stays the same.
-- `mode_autodetect_for` already handles all five extensions per the spec (`.xex/.car/.rom` → joystick, `.atr/.bas/.cas/.exe` → keyboard). M4's format loaders only need to respect the mode choice; the detection is already in place.
-- The menu's "Exit to browser" item is intentionally missing in M3 (no browser to exit to). Add it in M4 as the last item before "Cold reset".
+- The M3 `g_settings` struct is the ground truth for user preferences. M4's persistence should serialize it to INI and read it back before applying runtime settings.
+- Fn+L already opens a usable ROM browser. M4 should refine browser UX and wire it into the full menu flow rather than reintroducing a hardcoded load path.
+- `mode_autodetect_for` already handles all five extensions per the spec (`.xex/.car/.rom` -> joystick, `.atr/.bas/.cas/.exe` -> keyboard). Format-specific work should respect that mode choice.
+- The full menu can include "Exit to browser" as the last item before "Cold reset".
 - `audio_out::pump()` assumes 50 Hz PAL timing. When M4 adds NTSC-per-game overrides + the region toggle, `pump()`'s buffer-fill size (currently 882 samples = 20 ms) becomes slightly off for NTSC (16.7 ms/frame). The DMA ring tolerates this as drift; if you hear crackling specifically on NTSC games, drop the buffer to 735 frames for NTSC or accept the small over-fill.
 - Dual-POKEY stereo via `pokey_glue_set_stereo` is a cheap runtime flip, but the filter state inside pokeysnd.c is not cleared — expect 1-2 frames of filter transient on toggle. That's audible as a brief tick; mute-on-toggle is worth adding in M4 polish.

@@ -8,14 +8,18 @@ ported to the ESP32-S3 running Arduino framework via PlatformIO.
 
 ## Status
 
-Early development. See `docs/superpowers/specs/` for the design spec and
-`docs/superpowers/plans/` for milestone plans.
+Current working reference firmware: `v0.3-m3-t11a-renderperf`.
 
-- [x] M1 — bootstrap + HAL smoke test
-- [ ] M2 — atari800 core integration + first rendered frame
-- [ ] M3 — input routing + audio
-- [ ] M4 — UI: file browser + in-emulator menu
-- [ ] M5 — save states + polish
+- [x] M1 - bootstrap + HAL smoke test
+- [x] M2 - atari800 core integration + first rendered frame
+- [x] M3 - keyboard/joystick routing, fast POKEY audio, usable ROM browser
+- [ ] M4 - browser polish, full in-emulator menu, settings persistence
+- [ ] M5 - save states + final polish
+
+Implemented beyond the original M2 baseline: AltirraBASIC boot, SD ROM/ATR/XEX
+loading via Fn+L, fast ROM browser enumeration, Cardputer keyboard + joystick
+mapping, raw ES8311/I2S audio, Atari console/key-click sounds, and dirty-row LCD
+redraw optimization.
 
 ## Build
 
@@ -35,27 +39,34 @@ The build produces `.pio/build/cardputer-adv/firmware.bin`.
 
 ## Flash
 
-The expected workflow is via [M5Launcher](https://github.com/bmorcelli/Launcher)
-installed as the boot firmware. Copy `firmware.bin` to the Cardputer's SD card
-(Launcher's SD browser picks it up) or upload via Launcher's WUI (WiFi web UI).
-Launcher writes it to the inactive OTA app slot and reboots into it.
+The normal workflow keeps [M5Launcher](https://github.com/bmorcelli/Launcher) as
+the boot firmware and writes this app into Launcher's OTA app1 slot.
+
+Direct app1 flash over USB download mode:
 
 ```bash
-cp .pio/build/cardputer-adv/firmware.bin /Volumes/CARDPUTER/downloads/cardputer-atari800.bin
+pio pkg exec -- esptool.py --chip esp32s3 --port /dev/cu.usbmodem101 \
+  --baud 921600 write_flash 0x170000 .pio/build/cardputer-adv/firmware.bin
 ```
 
-Then on the Cardputer: disable USB-MSC in Launcher, select the bin from the SD browser.
-
-Advanced alternative — directly flash as the *primary* firmware, **overwriting M5Launcher**:
+SD/Launcher workflow:
 
 ```bash
-pio run -e cardputer-adv -t upload
+COPYFILE_DISABLE=1 cp .pio/build/cardputer-adv/firmware.bin \
+  /Volumes/CARDPUTER/downloads/cardputer-atari800.bin
+sync
 ```
+
+Then on the Cardputer, select the bin from Launcher's SD browser.
 
 ## Serial monitor
 
+`pio device monitor` is unreliable with the Cardputer USB-CDC re-enumeration on
+macOS. Use the active `/dev/cu.usbmodem*` port directly:
+
 ```bash
-pio device monitor -e cardputer-adv
+stty -f /dev/cu.usbmodem101 115200 raw -clocal -echo
+cat /dev/cu.usbmodem101
 ```
 
 ## Host-side tests
@@ -67,6 +78,8 @@ cmake -B build -S test
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+
+The current baseline has 17 host tests.
 
 ## License
 

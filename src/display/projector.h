@@ -11,6 +11,8 @@ extern "C" {
    (we sample from the center 320 — the active picture).
    palette is 256 entries of RGB565. */
 void projector_stretch_line(const uint8_t* atari_line, uint16_t* out_line, const uint16_t* palette);
+int projector_stretch_src_x(int out_x);
+int projector_pillarbox_src_x(int inner_x);
 
 /* M2 only implements stretch. The other three fall through to Stretch;
    T15 gives them real implementations. */

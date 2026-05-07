@@ -7,6 +7,10 @@
     "srcFilter": ["+<*>"],
     "includeDir": "src",
     "flags": [
+      "-O3",
+      "-fjump-tables",
+      "-ftree-switch-conversion",
+      "-fno-stack-protector",
       "-I$PROJECT_INCLUDE_DIR",
       "-DSTEREO_SOUND=1",
       "-DCARDPUTER_ATARI800",

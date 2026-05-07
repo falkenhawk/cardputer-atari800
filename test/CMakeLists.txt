@@ -62,3 +62,9 @@ add_test(NAME rom_args COMMAND test_rom_args)
 
 add_executable(test_settings test_settings.c ../src/settings/settings.c)
 add_test(NAME settings COMMAND test_settings)
+
+add_executable(test_frame_pacer test_frame_pacer.c ../src/timing/frame_pacer.c)
+add_test(NAME frame_pacer COMMAND test_frame_pacer)
+
+add_executable(test_dirty_lines test_dirty_lines.c ../src/display/dirty_lines.c)
+add_test(NAME dirty_lines COMMAND test_dirty_lines)

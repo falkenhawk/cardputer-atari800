@@ -6,16 +6,18 @@ library, with upstream `atari800` 5.2.0 vendored in `lib/atari800/`.
 
 ## Current state
 
+- **Reference firmware:** `v0.3-m3-t11a-renderperf`.
 - **Tags:** `v0.1-m1` (bootstrap + HAL), `v0.2-m2` (atari800 core + first frame).
-  NOTE: the existing `v0.2-m2` tag points at a premature commit — the T14 xex-loading
-  + SD-mount work that followed is on master but not yet re-tagged. When you're happy
-  with the state, move the tag forward with `git tag -f v0.2-m2 HEAD`.
-- Master branch, clean tree. HEAD splash: `v0.2-m2-t14q`.
-- **Hardware-verified:** SD mounts, `/sd/atari800/test.xex` loads via `BINLOAD_Loader`,
-  the 6502 executes it (horizontal colored bars render on LCD — static but correct —
-  the xex is a `LDA $D40B / STA $D018 / JMP $2000` loop), Fn+`\` cycles 4 display
-  modes, ~16 KB free heap at steady state, no crashes.
-- Build: RAM 45.9%, Flash 18.8%. Host tests 4/4 (sanity, palette, projector, loader).
+  Current M3 work is ahead of those tags on master.
+- **Hardware-verified baseline:** SD mounts after the tight heap pre-allocation
+  sequence, AltirraBASIC boots to `READY`, Fn+L opens the ROM browser, directory
+  enumeration is fast, ATR/XEX/CAR-style loads dispatch through the atari800
+  loaders, keyboard/joystick input is routed, joystick movement works,
+  fast POKEY audio remains usable, and Atari console/key-click sounds are audible.
+- **Latest performance baseline:** display redraws skip unchanged LCD rows, dirty
+  row runs are pushed in batches, and the frame pacer skips at most one render
+  after an over-budget drawn frame.
+- Build at this baseline: RAM ~46.5%, Flash ~20.9%. Host tests 17/17.
 
 ## Hardware (important quirks)
 
@@ -54,24 +56,44 @@ done
 
 ```
 src/
-  main.cpp              # boot, frame loop, keyboard diag, Fn+\ mode cycle, xex loader call
+  main.cpp              # boot, heap packing, frame loop, Fn actions, ROM browser handoff
+  audio/
+    audio_out.*         # raw ESP-IDF I2S + ES8311 setup
+    pokey_fast.*        # low-cost POKEY mixer used by the audio task
+    audio_console_speaker.*
+                        # GTIA/CONSOL speaker events for key clicks/system dings
   display/
     palette.{h,cpp}     # PAL + NTSC 256-color RGB565 LUTs
-    lcd.{h,cpp}         # M5Cardputer.Display wrapper
-    renderer.{h,cpp}    # Screen_atari → per-line project → lcd::push_line
+    lcd.{h,cpp}         # M5Cardputer.Display wrapper, line + rect pushes
+    dirty_lines.{h,c}   # source-row hash tracking for skipped redraws
+    renderer.{h,cpp}    # Screen_atari -> projector -> dirty batched LCD pushes
     projector.{h,cpp}   # 4 display modes (Stretch, Pillarbox, Cover, Pixel-perfect)
+    screenshot.{h,cpp}  # BMP screenshot path; still projects every row when armed
+  input/
+    keymap.*            # Cardputer key/Fn mapping to Atari key/action/joystick events
+    joystick.*          # joystick latch semantics for atari800 port
+    mode.*              # keyboard vs joystick mode, extension-based defaults
+  roms/
+    rom_args.*          # SD ROM selection + embedded ROM fallback argv builder
+  settings/
+    settings.*          # persisted runtime settings
   storage/
-    loader.{h,cpp}      # .xex parser (M2 subset)
+    loader.{h,cpp}      # loader dispatch helpers
+  timing/
+    frame_pacer.*       # PAL cadence + one-frame render recovery skip
+  ui/
+    rom_browser.*       # Fn+L browser overlay
+    rom_browser_model.* # compact dir/search model
   port_impl.cpp         # Atari core port hooks (timing, ROM loaders, Screen_Initialise,
-                        # input/sound stubs, PLATFORM_* stubs, weak display fallback)
-  port_display.cpp      # strong port_present_frame → renderer::present
+                        # input/audio/joystick/platform hooks, weak display fallback)
+  port_display.cpp      # strong port_present_frame -> renderer::present
 
 lib/
   atari800/             # upstream atari800 5.2.0 core (GPLv2), minimally patched
   atari800_port/        # unused since LDF needed port code in /src/; retained as docs
 
 test/
-  test_palette.c  test_projector.c  test_loader.c  test_sanity.c
+  test_*.c             # host-side tests for palette/projector/loader/input/audio/ui/timing
   CMakeLists.txt        # host-side tests via ctest, -Wall -Wextra -Wpedantic
 
 docs/superpowers/
@@ -130,8 +152,17 @@ wouldn't manifest until the 0xA000-0xBFFF cart region toggled.
 
 - `M5Cardputer` library auto-detects OG vs ADV at runtime via M5GFX. Don't hardcode board ID; let the library do it.
 - `Atari800_Frame()` runs every 20 ms (50 Hz PAL). No `delay()` in loop(); frame pacing replaces it.
-- Keyboard polling still prints to Serial but does NOT route to Atari core yet (that's M3's job). Only Fn+`\` is wired to something (mode cycle).
-- `port_impl.cpp` stubs for sound, joystick, platform_* return neutral values. M3 replaces them with real implementations.
+- Keep the Atari core cadence independent from LCD cost. If LCD transfer runs long,
+  skip only rendering; do not skip `Atari800_Frame()` unless you are deliberately
+  changing emulation timing.
+- The renderer's dirty-row cache must be invalidated when display mode, TV region,
+  or overlay ownership changes. Fn+L currently calls `renderer::invalidate()`
+  before opening the browser.
+- Keyboard polling must read `keysState()` directly. `Keyboard.isChange()` is
+  consumed-on-read and can steal keystrokes from later callers.
+- Audio uses the fast POKEY path for usability on Cardputer. Replacing it with
+  synchronized upstream POKEYSND made system sounds authentic but made games and
+  input responsiveness unusable on this hardware.
 
 ## xex loading
 
@@ -143,27 +174,39 @@ through ESP-IDF VFS at `/sd/…`, then sets `BINLOAD_start_binloading=TRUE` and
 lets the core's SIO layer inject a fake boot sector that drives proper segment
 loading + RUNAD/INITAD handling.
 
-Path format from main.cpp: translate `/atari800/test.xex` to `/sd/atari800/test.xex`.
+Path format for legacy helpers: translate `/atari800/foo.xex` to
+`/sd/atari800/foo.xex`. Normal user flow is now Fn+L -> ROM browser -> loader
+dispatch.
 
-## What M3 needs to deliver (per the design spec)
+## Current M3 baseline
 
-Keyboard → Atari input wiring per the Fn layer defined in spec section 4.3:
-- Default keys → Atari keyboard matrix (KBCODE)
-- `Fn+1..8` → console buttons (Option/Select/Start/Reset/Help/Break + menu/save state)
-- `Fn + ; . , /` → Atari cursor (maps to Ctrl+`-`/`=`/`+`/`*` at matrix level)
-- Dual-cluster joystick: `ESAD+K/L` and `; , . / + Z/X` (simultaneous, OR'd into Joystick-1)
-- Auto-detect keyboard vs joystick mode per loaded file (`.atr/.bas` → keyboard, `.xex/.car` → joystick), `Fn+J` to override
+- Keyboard input routes into the Atari keyboard matrix; Fn actions cover display
+  mode cycling, reset/break-style controls, volume/brightness, screenshot, mode
+  toggle, and Fn+L ROM browser.
+- Joystick mode maps both Cardputer clusters into joystick 1 and keeps direction
+  and trigger state independent so movement does not accidentally become fire.
+- File extension defaults select keyboard vs joystick mode (`.atr`/`.bas` vs
+  `.xex`/`.car`/`.rom`), with Fn+J manual override.
+- Audio is mono raw I2S through ES8311 using the fast POKEY mixer, with console
+  speaker events mixed for BASIC/system key sounds.
+- Fn+L opens the ROM browser overlay. The browser owns keyboard + screen while
+  open, keeps the previous list visible during fast directory loads, filters
+  ignored macOS sidecar files, and dispatches loads through atari800 paths.
 
-POKEY audio via the ES8311 codec at 44.1 kHz stereo. Single-POKEY default with a menu toggle for dual-POKEY stereo. Mute on menu open. Heap is TIGHT (~36 KB free at steady state) — the I²S ring buffer must be allocated at setup(), not runtime.
+## M4 remaining work
 
-NTSC/PAL runtime toggle. Machine-model picker (800XL / 65XE / 130XE / XEGS). Probably minimum menu UI to flip these — full menu is M4.
+- Browser UX can still be improved, but the usable ROM browser belongs to the
+  M3 baseline now.
+- Still pending from the broader design: full in-emulator settings menu,
+  settings persistence, machine picker, and polished runtime NTSC/PAL controls.
+- Save/load states remain M5 work.
 
 ## Session conventions
 
 - Auto mode (`/loop` or the session `auto` toggle) has been fine for this project. User prefers terse, direct exchanges.
 - Subagent-driven-development worked well: fresh subagent per task → spec review → code review. See the M1/M2 commit history for the cadence.
 - User prefers M5Launcher-flash-to-app1 over `pio run -t upload`. The Launcher layout is `app0 (test, 1.4 MB) + app1 (ota_0, 5 MB)` at offsets `0x10000` and `0x170000` (confirmed by reading the partition table in download mode).
-- Splash version string is bumped on each HUMAN CHECKPOINT so it's visually obvious which build was flashed. Current: `v0.2-m2-t14q`. Also `FW_VER=…` is printed on Serial at boot — the LCD splash is easy to miss, Serial isn't.
+- Splash version string is bumped on each HUMAN CHECKPOINT so it's visually obvious which build was flashed. Current: `v0.3-m3-t11a-renderperf`. Also `FW_VER=...` is printed on Serial at boot; the LCD splash is easy to miss, Serial isn't.
 - When flashing via Launcher → SD: name the file with a version suffix
   (`cardputer-atari800.m2-t14q.bin`) so Launcher's browser unambiguously shows
   which build is selected. We once burned an hour chasing a "fix not working"
@@ -200,11 +243,12 @@ NTSC/PAL runtime toggle. Machine-model picker (800XL / 65XE / 130XE / XEGS). Pro
   the "different thing" in a reproducing failure, verify its involvement with
   a primary-firmware flash FIRST before building fixes around it.
 
-## Starting M3
+## Continuing From Here
 
-Invoke `superpowers:writing-plans` (or via `/plan` slash command) with M3 scope above. Then `superpowers:subagent-driven-development` to execute.
+Use `v0.3-m3-t11a-renderperf` as the next good reference baseline unless the
+user explicitly rolls back. Before changing heap order, audio path, or display
+pacing, skim the M2 memory-management arc and the recent M3 commits; those areas
+have repeatedly produced hardware-only failures.
 
-Before kicking off, skim the M2 plan's "memory-management arc" commits (see `git log v0.1-m1..v0.2-m2 --oneline`) — especially `9648de4`, `b5bc49d`, `d7fb77e`, `9331748`, `dc7bc0d` — they codify the memory pattern M3 must keep intact.
-
-— Handoff written 2026-04-21, updated 2026-04-22 after the T14 xex-loading
-  + heap-packing work. M2 is functionally complete pending a tag move.
+Handoff written 2026-04-21, refreshed 2026-05-07 after the M3 input/audio,
+ROM-browser, and display-performance work.

@@ -19,6 +19,10 @@ void push_line(int y, const uint16_t* rgb565, int width) {
   M5Cardputer.Display.pushImage(0, y, width, 1, rgb565);
 }
 
+void push_rect(int x, int y, int w, int h, const uint16_t* rgb565) {
+  M5Cardputer.Display.pushImage(x, y, w, h, rgb565);
+}
+
 void fill_rect(int x, int y, int w, int h, uint16_t color) {
   M5Cardputer.Display.fillRect(x, y, w, h, color);
 }

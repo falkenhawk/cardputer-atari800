@@ -13,6 +13,7 @@
 #include "display/renderer.h"
 #include "display/screenshot.h"
 #include "input/input_port.h"
+#include "timing/frame_pacer.h"
 #include "ui/rom_browser.h"
 #include "roms/rom_args.h"
 
@@ -115,6 +116,7 @@ static void on_input_action(km_action_t act) {
          the format. Browser walks up from /sd/atari800/roms to deepest
          existing dir on first open and remembers last dir until reboot. */
       Serial.println("action: open ROM browser");
+      renderer::invalidate();
       rom_browser::open();
       break;
 
@@ -250,7 +252,7 @@ void setup() {
   delay(500);
   Serial.println();
   Serial.println("cardputer-atari800 — boot");
-  Serial.println("FW_VER=v0.3-m3-t10bd-robbo");
+  Serial.println("FW_VER=v0.3-m3-t11a-renderperf");
 
   // ---- Heap diagnostics BEFORE any big allocations ----
   size_t free0  = ESP.getFreeHeap();
@@ -363,7 +365,7 @@ void setup() {
   d.setCursor(8, 16);
   d.print("cardputer-atari800");
   d.setCursor(8, 32);
-  d.print("v0.3-m3-t10bd-robbo");
+  d.print("v0.3-m3-t11a-renderperf");
   d.setCursor(8, 56);
   d.setTextColor(TFT_DARKGREY, TFT_BLACK);
   d.print("xex: Fn+\\ modes");
@@ -439,9 +441,8 @@ void setup() {
 
   dump_shadow_ptrs("post-core-init");
 
-  // M3: boot into AltirraBASIC READY by default. User triggers xex load via
-  // Fn+L (KM_ACT_LOAD_XEX), which calls try_load_xex("/atari800/test.xex").
-  // Avoids the "must rename test.xex" friction from early M3 testing.
+  // M3: boot into AltirraBASIC READY by default. User opens the ROM browser
+  // via Fn+L and picks a file explicitly.
 }
 
 void loop() {
@@ -460,18 +461,23 @@ void loop() {
     return;
   }
 
-  // Frame loop — run atari800 at ~50 Hz (PAL) and present.
-  static uint32_t last_frame_ms = 0;
+  // Frame loop: keep Atari at PAL cadence; LCD draws may be skipped if a
+  // full-frame transfer overruns the 20 ms budget.
+  static frame_pacer_t frame_pacer = {0};
   static int frame_count = 0;
+  static uint32_t log_drawn = 0;
+  static uint32_t log_skipped = 0;
   uint32_t now = millis();
-  if (now - last_frame_ms >= 20) {
-    last_frame_ms = now;
+  uint32_t now_us = micros();
+  if (frame_pacer_due(&frame_pacer, now_us)) {
+    frame_pacer_advance(&frame_pacer, now_us);
     input_port::poll();          // snapshot keyboard before stepping the core
     /* If the input action just opened the ROM browser, skip the rest of
        this frame — otherwise Atari800_Frame() + renderer::present()
        would clobber the browser screen we just drew. Subsequent loop
        iterations short-circuit at the top via the is_open() check. */
     if (rom_browser::is_open()) return;
+    bool render_frame = frame_pacer_take_render_slot(&frame_pacer) != 0;
     if (frame_count < 3) {
       Serial.printf("frame %d begin\n", frame_count);
       dump_shadow_ptrs("pre-frame");
@@ -479,14 +485,27 @@ void loop() {
     uint32_t t_af = micros();
     Atari800_Frame();
     uint32_t t_render = micros();
-    renderer::present(reinterpret_cast<const uint8_t*>(Screen_atari));
+    if (render_frame) {
+      renderer::present(reinterpret_cast<const uint8_t*>(Screen_atari));
+      log_drawn++;
+    } else {
+      log_skipped++;
+    }
     uint32_t t_end = micros();
+    frame_pacer_finish_frame(&frame_pacer, t_end - t_af, render_frame ? 1 : 0);
     if ((frame_count % 50) == 0) {
-      Serial.printf("frame %d: atari=%lu render=%lu total=%lu\n",
+      Serial.printf("frame %d: atari=%lu render=%lu total=%lu draw=%u dirty=%d runs=%d drawn=%lu skipped=%lu\n",
                     frame_count,
                     (unsigned long)(t_render - t_af),
                     (unsigned long)(t_end - t_render),
-                    (unsigned long)(t_end - t_af));
+                    (unsigned long)(t_end - t_af),
+                    render_frame ? 1U : 0U,
+                    render_frame ? renderer::last_dirty_rows() : 0,
+                    render_frame ? renderer::last_dirty_runs() : 0,
+                    (unsigned long)log_drawn,
+                    (unsigned long)log_skipped);
+      log_drawn = 0;
+      log_skipped = 0;
     }
     if (frame_count < 3) {
       Serial.printf("frame %d done\n", frame_count);

@@ -16,6 +16,8 @@ extern void projector_pillarbox_line(const uint8_t* atari_line,
 extern void projector_cover_line(const uint8_t* atari_line,
                                  uint16_t*       out_line,
                                  const uint16_t* palette);
+extern int projector_stretch_src_x(int out_x);
+extern int projector_pillarbox_src_x(int inner_x);
 
 static int fail = 0;
 #define CHECK(expr, msg) do { if (!(expr)) { fprintf(stderr, "FAIL: " msg "\n"); fail = 1; } } while (0)
@@ -53,6 +55,11 @@ int main(void) {
   CHECK(saw_abcd, "stretch missed 0xABCD pixels");
   CHECK(saw_1234, "stretch missed 0x1234 pixels");
 
+  CHECK(projector_stretch_src_x(0) == 0, "stretch x-map first pixel");
+  CHECK(projector_stretch_src_x(1) == 1, "stretch x-map keeps rounded nearest source");
+  CHECK(projector_stretch_src_x(2) == 3, "stretch x-map skips every fourth source pixel");
+  CHECK(projector_stretch_src_x(239) == 319, "stretch x-map last pixel");
+
   /* --- Pixel-perfect (1:1 crop): output maps to center 240 of source. */
   for (int i = 0; i < 384; i++) atari_line[i] = (uint8_t)(i & 0xFF); /* gradient */
   for (int i = 0; i < 256; i++) palette[i] = (uint16_t)i;
@@ -73,6 +80,8 @@ int main(void) {
   CHECK(out_line[239] == 0x0000, "pillarbox right bar is black");
   /* Pixel 120 (center) should be the source color. */
   CHECK(out_line[120] == 0xBEEF, "pillarbox center is source color");
+  CHECK(projector_pillarbox_src_x(0) == 0, "pillarbox x-map first inner pixel");
+  CHECK(projector_pillarbox_src_x(224) == 319, "pillarbox x-map last inner pixel");
 
   /* --- Cover: horizontally equivalent to Stretch for a solid color. */
   for (int i = 0; i < 384; i++) atari_line[i] = 0x10;

@@ -278,6 +278,10 @@ power on / reset
 
 ### 7.2 File browser
 
+Milestone split: a usable full-screen ROM browser is part of the M3 baseline.
+M4 improves the browser experience and adds the broader in-emulator menu and
+settings persistence around it. Save-state work remains a later polish item.
+
 - Rooted at `/atari800/`
 - Shows folders and recognized file types
 - Top entry = "Resume <last>" when a last-run file exists
