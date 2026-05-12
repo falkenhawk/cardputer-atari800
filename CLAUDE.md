@@ -6,9 +6,9 @@ library, with upstream `atari800` 5.2.0 vendored in `lib/atari800/`.
 
 ## Current state
 
-- **Reference firmware:** `v0.3-m3-t11a-renderperf`.
-- **Tags:** `v0.1-m1` (bootstrap + HAL), `v0.2-m2` (atari800 core + first frame).
-  Current M3 work is ahead of those tags on master.
+- **Reference firmware:** splash `v0.3-m3-t11a-renderperf` at commit `9f949c9`
+  on `main`. There are no git tags — the splash version string and commit hash
+  are the only baseline markers.
 - **Hardware-verified baseline:** SD mounts after the tight heap pre-allocation
   sequence, AltirraBASIC boots to `READY`, Fn+L opens the ROM browser, directory
   enumeration is fast, ATR/XEX/CAR-style loads dispatch through the atari800
@@ -193,13 +193,43 @@ dispatch.
   open, keeps the previous list visible during fast directory loads, filters
   ignored macOS sidecar files, and dispatches loads through atari800 paths.
 
-## M4 remaining work
+## What's next — pick up here
 
-- Browser UX can still be improved, but the usable ROM browser belongs to the
-  M3 baseline now.
-- Still pending from the broader design: full in-emulator settings menu,
-  settings persistence, machine picker, and polished runtime NTSC/PAL controls.
-- Save/load states remain M5 work.
+The M3 plan (`docs/superpowers/plans/2026-04-22-m3-input-audio-settings.md`)
+has Tasks 13–18 still pending. They are the natural next chunk and have full
+spec text + code in the plan:
+
+- **T13** — wire a module-level `settings_t g_settings` into `main.cpp` and
+  prove the apply path compiles. Plumbing only; visual change comes in T14/T15.
+- **T14** — `src/settings/settings_apply_runtime.{h,cpp}`: on settings change,
+  mute audio + update renderer region + update `pokey_glue` stereo + coldstart
+  the core once. `settings_apply()` itself is already pure-C and host-tested.
+- **T15** — `src/ui/menu.{h,cpp}` overlay: modal, dims screen, cursor-key
+  navigation, mutates `g_settings`, re-applies via T14 on exit. Reuses the
+  same main-loop suspend pattern Fn+L already uses for the ROM browser —
+  while open, `Atari800_Frame()` does not step, the renderer does not
+  present, and audio is muted (the ROM browser already implements all three;
+  port that handling verbatim).
+- **T16** — `src/ui/osd.{h,cpp}`: transient toast for volume/brightness/mode
+  (the file-browser notes also call out a visual toast as a missing piece).
+- **T17** — verify mute-on-menu and emulation-pause-on-menu end-to-end on
+  hardware. Both must hold: no audio underflow artefacts, no Atari frames
+  advance while the menu is open, cursor input does not leak to the keyboard
+  matrix.
+- **T18** — milestone acceptance + bump splash string. We don't tag — just
+  bump `FW_VER` and note the commit hash.
+
+Also open from `docs/file-browser-notes.md`: filename ellipsis/scroll on long
+entries, recent-files quick-load, persistent dir index cache (`.romidx`),
+file-details panel, multi-disk mount, sort options. None are blockers; pick
+based on user signal.
+
+Save/load states remain M5 work — out of scope until M4 lands.
+
+Before starting: read the spec (`docs/superpowers/specs/2026-04-20-cardputer-atari800-design.md`)
+§7.3 for the menu UX, and skim recent commits around `src/settings/` and the
+ROM-browser main-loop integration in `src/main.cpp` for the established
+suspend/owner-of-screen pattern.
 
 ## Session conventions
 

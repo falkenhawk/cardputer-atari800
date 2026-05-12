@@ -160,6 +160,17 @@ still mounts after ANY change that shifts BSS or static initialization order.
     - Date-modified or size sorts could help large dirs
     - Save preference per-dir via NVS
 
+12a. **CAS loading — deferred (future milestone)**
+    - Dispatch is already wired through `AFILE_OpenFile` →
+      `CASSETTE_Insert` → `CASSETTE_hold_start = TRUE` → `Atari800_Coldstart()`
+      (lib/atari800/src/afile.c:210), but not hardware-verified
+    - Needed before declaring CAS supported: end-to-end test with a known-good
+      `.cas`; a visible "tape loading" UI hint (real-time minutes per program);
+      decision on whether to flip `SERIO_SOUND` for turbo-loader compatibility;
+      keyboard mapping for cassette deck controls if any multi-load tapes are
+      in scope
+    - Postponed — re-enter scope only when a specific CAS use case lands
+
 ### High effort, architectural
 
 13. **Lazy/streamed enumeration**
